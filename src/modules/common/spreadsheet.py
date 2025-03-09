@@ -5,10 +5,21 @@ from ...utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# スプレッドシート接続のキャッシュ
+_spreadsheet_cache = None
+
 def get_spreadsheet_connection():
     """
     Google スプレッドシートへの接続を取得する
+    キャッシュされた接続がある場合はそれを返す
     """
+    global _spreadsheet_cache
+    
+    # キャッシュされた接続がある場合はそれを返す
+    if _spreadsheet_cache is not None:
+        logger.debug("キャッシュされたスプレッドシート接続を使用します")
+        return _spreadsheet_cache
+    
     try:
         # 設定値の取得
         spreadsheet_id = env.get_config_value("SPREADSHEET", "SSID")
@@ -30,6 +41,9 @@ def get_spreadsheet_connection():
         # スプレッドシートを開く
         spreadsheet = client.open_by_key(spreadsheet_id)
         logger.info(f"✓ スプレッドシートへの接続に成功しました: {spreadsheet.title}")
+        
+        # 接続をキャッシュ
+        _spreadsheet_cache = spreadsheet
         
         return spreadsheet
         

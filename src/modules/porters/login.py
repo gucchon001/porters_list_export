@@ -7,8 +7,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 
-from ...utils.environment import EnvironmentUtils as env
-from ...utils.logging_config import get_logger
+# プロジェクトのルートディレクトリをPYTHONPATHに追加
+root_dir = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.append(str(root_dir))
+
+from src.utils.environment import EnvironmentUtils as env
+from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -19,190 +23,179 @@ class Login:
         self.screenshot_dir = browser.screenshot_dir
     
     def execute(self):
-        """
-        ログイン処理を実行する
-        """
+        """ログイン処理を実行"""
         try:
             logger.info("=== ログイン処理を開始します ===")
             
-            # 環境変数から認証情報を取得
-            admin_url = env.get_config_value("PORTERS", "ADMIN_URL")
-            company_id = env.get_env_var("PORTERS_COMPANY_ID")
-            username = env.get_env_var("PORTERS_USERNAME")
-            password = env.get_env_var("PORTERS_PASSWORD")
+            # 環境変数からログイン情報を取得
+            admin_url = env.get_env_var('ADMIN_URL')
+            admin_id = env.get_env_var('ADMIN_ID')  # 会社ID
+            login_id = env.get_env_var('LOGIN_ID')
+            password = env.get_env_var('LOGIN_PASSWORD')
             
-            if not all([admin_url, company_id, username, password]):
-                logger.error("認証情報が不足しています")
+            # ログインページにアクセス
+            logger.info(f"ログインページにアクセスします: {admin_url}")
+            self.browser.navigate_to(admin_url)
+            
+            # ログイン前のスクリーンショット
+            self.browser.save_screenshot("login_before.png")
+            
+            # 会社ID入力
+            company_id_field = self.browser.get_element('porters', 'company_id')
+            if not company_id_field:
+                logger.error("会社IDフィールドが見つかりません")
                 return False
             
-            # 管理画面URLに移動
-            if not self.browser.navigate_to(admin_url):
-                logger.error(f"管理画面URL({admin_url})への移動に失敗しました")
+            company_id_field.clear()
+            company_id_field.send_keys(admin_id)
+            logger.info(f"✓ 会社IDを入力しました: {admin_id}")
+            
+            # ユーザー名入力
+            username_field = self.browser.get_element('porters', 'username')
+            if not username_field:
+                logger.error("ユーザー名フィールドが見つかりません")
                 return False
             
-            logger.info(f"管理画面URL({admin_url})に移動しました")
-            self.browser.save_screenshot("login_page.png")
+            username_field.clear()
+            username_field.send_keys(login_id)
+            logger.info("✓ ユーザー名を入力しました")
             
-            # ログインフォームの要素を取得
-            company_id_input = self.browser.get_element("porters", "company_id")
-            username_input = self.browser.get_element("porters", "username")
-            password_input = self.browser.get_element("porters", "password")
-            
-            if not all([company_id_input, username_input, password_input]):
-                logger.error("ログインフォームの要素の取得に失敗しました")
+            # パスワード入力
+            password_field = self.browser.get_element('porters', 'password')
+            if not password_field:
+                logger.error("パスワードフィールドが見つかりません")
                 return False
             
-            # 認証情報を入力
-            company_id_input.clear()
-            company_id_input.send_keys(company_id)
-            logger.info("会社IDを入力しました")
+            password_field.clear()
+            password_field.send_keys(password)
+            logger.info("✓ パスワードを入力しました")
             
-            username_input.clear()
-            username_input.send_keys(username)
-            logger.info("ユーザー名を入力しました")
+            # 入力後のスクリーンショット
+            self.browser.save_screenshot("login_input.png")
             
-            password_input.clear()
-            password_input.send_keys(password)
-            logger.info("パスワードを入力しました")
-            
-            self.browser.save_screenshot("login_form_filled.png")
-            
-            # ログインボタンをクリック
-            login_button = self.browser.get_element("porters", "login_button")
+            # ログインボタンクリック
+            login_button = self.browser.get_element('porters', 'login_button')
             if not login_button:
-                # ログインボタンが見つからない場合、フォームをサブミット
-                logger.warning("ログインボタンが見つかりません。フォームをサブミットします。")
-                password_input.submit()
-            else:
-                login_button.click()
-            
-            logger.info("ログインボタンをクリックしました")
-            
-            # ログイン後のページ読み込みを待機
-            try:
-                WebDriverWait(self.browser.driver, 10).until(
-                    lambda driver: "login" not in driver.current_url.lower()
-                )
-                logger.info("ログイン後のページ読み込みが完了しました")
-            except TimeoutException:
-                logger.error("ログイン後のページ読み込みがタイムアウトしました")
-                self.browser.save_screenshot("login_timeout.png")
+                logger.error("ログインボタンが見つかりません")
                 return False
             
-            # ログイン成功の確認
-            self.browser.save_screenshot("after_login.png")
+            login_button.click()
+            logger.info("✓ ログインボタンをクリックしました")
             
-            # ページ内容を解析してログイン成功を確認
-            page_content = self.browser.analyze_page_content()
+            # ログイン処理待機
+            time.sleep(5)
             
-            if page_content.get('error_messages'):
-                logger.error(f"ログインエラーが発生しました: {page_content['error_messages']}")
-                return False
+            # 二重ログインポップアップ対応
+            self._handle_double_login_popup()
             
-            if page_content.get('welcome_message') or page_content.get('dashboard_elements'):
-                logger.info("✅ ログインに成功しました")
-                return True
+            # ログイン後のスクリーンショット
+            self.browser.save_screenshot("login_after.png")
             
-            # URLでログイン成功を確認
+            # ログイン結果の確認
             current_url = self.browser.driver.current_url
-            if "login" not in current_url.lower():
-                logger.info(f"現在のURL: {current_url}")
-                logger.info("✅ URLからログイン成功を確認しました")
+            logger.info(f"ログイン後のURL: {current_url}")
+            
+            # ログイン成功を判定
+            login_success = (admin_url != current_url and "login" not in current_url.lower())
+            
+            if login_success:
+                logger.info("✅ ログインに成功しました！")
                 return True
-            
-            logger.error("ログインに失敗しました")
-            return False
-            
+            else:
+                logger.error("❌ ログインに失敗しました")
+                return False
+                
         except Exception as e:
             logger.error(f"ログイン処理中にエラーが発生しました: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
-            self.browser.save_screenshot("login_error.png")
             return False
     
+    def _handle_double_login_popup(self):
+        """二重ログインポップアップの処理"""
+        # 二重ログインポップアップが表示されているか確認
+        double_login_ok_button = "#pageDeny > div.ui-dialog.ui-widget.ui-widget-content.ui-corner-all.ui-front.p-ui-messagebox.ui-dialog-buttons.ui-draggable > div.ui-dialog-buttonpane.ui-widget-content.ui-helper-clearfix > div > button > span"
+        
+        try:
+            # 短いタイムアウトで確認（ポップアップが表示されていない場合にテストが長時間停止しないように）
+            popup_wait = WebDriverWait(self.browser.driver, 3)
+            ok_button = popup_wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, double_login_ok_button)))
+            
+            # ポップアップが見つかった場合
+            logger.info("⚠️ 二重ログインポップアップが検出されました。OKボタンをクリックします。")
+            self.browser.save_screenshot("double_login_popup.png")
+            
+            # OKボタンをクリック
+            ok_button.click()
+            logger.info("✓ 二重ログインポップアップのOKボタンをクリックしました")
+            time.sleep(2)
+            
+        except TimeoutException:
+            # ポップアップが表示されていない場合は何もしない
+            logger.info("二重ログインポップアップは表示されていません。処理を継続します。")
+        except Exception as e:
+            # その他のエラー
+            logger.warning(f"二重ログインポップアップ処理中にエラーが発生しましたが、処理を継続します: {e}")
+    
     def logout(self):
-        """
-        ログアウト処理を実行する
-        """
+        """明示的なログアウト処理を実行する"""
         try:
             logger.info("=== ログアウト処理を開始します ===")
             
+            # 現在のURLをログに記録
+            current_url = self.browser.driver.current_url
+            logger.info(f"ログアウト前のURL: {current_url}")
+            
+            # スクリーンショット
+            self.browser.save_screenshot("before_logout.png")
+            
             # ログアウトボタンを探す
-            logout_button = None
+            # まず、セレクタ情報を確認
+            logout_selector = None
+            if 'porters_menu' in self.browser.selectors and 'logout_button' in self.browser.selectors['porters_menu']:
+                logout_selector = self.browser.selectors['porters_menu']['logout_button']['selector_value']
             
-            # 一般的なログアウトボタンのセレクタを試す
-            selectors = [
-                (By.CSS_SELECTOR, "a.logout, button.logout, a[href*='logout'], a[href*='sign-out']"),
-                (By.XPATH, "//a[contains(text(), 'ログアウト') or contains(text(), 'Logout')]"),
-                (By.XPATH, "//button[contains(text(), 'ログアウト') or contains(text(), 'Logout')]"),
-                (By.XPATH, "//a[contains(@href, 'logout') or contains(@href, 'sign-out')]")
-            ]
+            if not logout_selector:
+                # セレクタがない場合、一般的なログアウトボタンのセレクタを試す
+                logger.info("ログアウトボタンのセレクタが設定されていません。一般的なセレクタを試します。")
+                possible_selectors = [
+                    'a[href*="logout"]', 
+                    'button[id*="logout"]', 
+                    'a[id*="logout"]',
+                    '.logout', 
+                    '#logout'
+                ]
+                
+                # 各セレクタを試す
+                for selector in possible_selectors:
+                    try:
+                        logout_elements = self.browser.driver.find_elements(By.CSS_SELECTOR, selector)
+                        if logout_elements:
+                            logger.info(f"ログアウトボタンを発見しました: {selector}")
+                            logout_selector = selector
+                            break
+                    except:
+                        continue
             
-            for selector_type, selector in selectors:
+            if logout_selector:
+                # ログアウトボタンをクリック
                 try:
-                    elements = self.browser.driver.find_elements(selector_type, selector)
-                    if elements:
-                        logout_button = elements[0]
-                        logger.info(f"ログアウトボタンを見つけました: {selector}")
-                        break
-                except Exception:
-                    continue
-            
-            if logout_button:
-                try:
-                    # ログアウトボタンをクリック
+                    logger.info(f"ログアウトボタンを探索: {logout_selector}")
+                    logout_button = WebDriverWait(self.browser.driver, 10).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, logout_selector))
+                    )
                     logout_button.click()
-                    logger.info("ログアウトボタンをクリックしました")
-                    
-                    # ログアウト後のページ読み込みを待機
+                    logger.info("✓ ログアウトボタンをクリックしました")
                     time.sleep(3)
-                    self.browser.save_screenshot("after_logout.png")
-                    
-                    # ログアウト成功の確認
-                    current_url = self.browser.driver.current_url
-                    if "login" in current_url.lower():
-                        logger.info("✅ ログアウトに成功しました")
-                        return True
-                    
-                    logger.warning("ログアウト後のURLにloginが含まれていません")
-                    
-                    # JavaScriptでログアウトを試みる
-                    try:
-                        self.browser.driver.execute_script("window.location.href = '/logout' || '/auth/logout' || '/porters/logout';")
-                        time.sleep(3)
-                        logger.info("✅ JavaScriptでのログアウトに成功しました")
-                        return True
-                    except Exception as js_e:
-                        logger.error(f"JavaScriptを使用したログアウトにも失敗しました: {str(js_e)}")
-                except Exception as click_e:
-                    logger.error(f"ログアウトボタンのクリックに失敗しました: {str(click_e)}")
-                    
-                    # JavaScriptでログアウトを試みる
-                    try:
-                        self.browser.driver.execute_script("window.location.href = '/logout' || '/auth/logout' || '/porters/logout';")
-                        time.sleep(3)
-                        logger.info("✅ JavaScriptでのログアウトに成功しました")
-                        return True
-                    except Exception as js_e:
-                        logger.error(f"JavaScriptを使用したログアウトにも失敗しました: {str(js_e)}")
-            else:
-                # セレクタが見つからない場合、JavaScriptでログアウトを試みる
-                logger.warning("ログアウトボタンが見つかりませんでした。JavaScriptでのログアウトを試みます。")
-                try:
-                    # POSTERSの一般的なログアウトURLパターンを試す
-                    self.browser.driver.execute_script("window.location.href = '/logout' || '/auth/logout' || '/porters/logout';")
-                    time.sleep(3)
-                    logger.info("✓ JavaScriptでログアウトURLにリダイレクトしました")
-                    self.browser.save_screenshot("after_redirect_logout.png")
                     return True
-                except Exception as js_e:
-                    logger.error(f"JavaScriptを使用したログアウトリダイレクトにも失敗しました: {str(js_e)}")
-            
-            logger.warning("ログアウト処理ができませんでした。ブラウザを閉じて強制終了します。")
-            return False
-            
+                    
+                except Exception as e:
+                    logger.warning(f"ログアウト処理に失敗しましたが、処理を継続します: {str(e)}")
+                    return False
+            else:
+                logger.warning("ログアウトボタンが見つかりませんでした")
+                return False
+                
         except Exception as e:
             logger.error(f"ログアウト処理中にエラーが発生しました: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
             return False 

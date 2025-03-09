@@ -23,6 +23,13 @@ def setup_configurations():
         if service_account_file:
             logger.info(f"SERVICE_ACCOUNT_FILE: {service_account_file}")
         
+        # スプレッドシートへの接続をテスト
+        spreadsheet = get_spreadsheet_connection()
+        if not spreadsheet:
+            logger.error("スプレッドシートへの接続に失敗したため、処理を中止します")
+            return False
+        logger.info("スプレッドシートへの接続テストに成功しました")
+        
         return True
     except Exception as e:
         logger.error(f"設定のロードに失敗: {str(e)}")
@@ -42,12 +49,6 @@ def process_consult_flags():
     logger.info("=" * 80)
     logger.info("処理ブロック1: 相談フラグの確認と新規IDの抽出を開始します")
     logger.info("=" * 80)
-    
-    # スプレッドシートへの接続を取得
-    spreadsheet = get_spreadsheet_connection()
-    if not spreadsheet:
-        logger.error("スプレッドシートへの接続に失敗したため、処理を中止します")
-        return None
     
     # フラグに一致するIDを検索
     matching_ids = find_ids_with_matching_flags()
@@ -95,7 +96,7 @@ def process_anq_data(matching_ids=None):
         matching_ids (list, optional): 処理対象のIDリスト。指定がない場合は処理ブロック1の結果を使用
         
     Returns:
-        bool: 処理が成功した場合はTrue、失敗した場合はFalse
+        tuple: (success, csv_path) 処理が成功した場合はTrue、失敗した場合はFalse、およびCSVファイルのパス
     """
     # IDが指定されていない場合は処理ブロック1を実行
     if matching_ids is None:
@@ -104,7 +105,7 @@ def process_anq_data(matching_ids=None):
     
     if not matching_ids:
         logger.warning("一致するIDがないため、アンケートデータの取得をスキップします")
-        return False
+        return False, None
     
     logger.info("=" * 80)
     logger.info("処理ブロック2: アンケートデータの取得とCSV出力を開始します")
@@ -113,61 +114,71 @@ def process_anq_data(matching_ids=None):
     # アンケートデータを取得してCSV出力
     logger.info(f"{len(matching_ids)}件のIDに対するアンケートデータを取得します")
     
-    success, _ = analyze_anq_data(matching_ids)
+    success, csv_path = analyze_anq_data(matching_ids)
     if success:
-        logger.info("✅ アンケートデータの取得とCSV出力が完了しました")
+        logger.info(f"✅ アンケートデータの取得とCSV出力が完了しました: {csv_path}")
         logger.info("=" * 80)
         logger.info("処理ブロック2: アンケートデータの取得とCSV出力が完了しました")
         logger.info("=" * 80)
-        return True
+        return True, csv_path
     else:
         logger.error("❌ アンケートデータの取得とCSV出力に失敗しました")
         logger.info("=" * 80)
         logger.info("処理ブロック2: アンケートデータの取得とCSV出力が失敗しました")
         logger.info("=" * 80)
-        return False
+        return False, None
 
 def process_porters_import(run_anq_data=False, matching_ids=None):
     """
-    処理ブロック3: PORTERSへのデータインポート
-    - Seleniumを使用してPORTERSシステムにログイン
-    - 求職者インポート機能を使用
-    - 保存したCSVファイルをアップロード
-    - LINE初回アンケート取込形式でインポート
+    PORTERSへのデータインポート処理を実行する
     
     Args:
-        run_anq_data (bool): アンケートデータ処理を実行するかどうか
-        matching_ids (list, optional): アンケートデータ処理に使用するIDリスト
-        
+        run_anq_data (bool): アンケートデータ分析を実行するかどうか
+        matching_ids (list): マッチングするID一覧
+    
     Returns:
-        bool: 処理が成功した場合はTrue、失敗した場合はFalse
+        bool: 処理成功の場合はTrue、失敗の場合はFalse
     """
-    # アンケートデータ処理を実行する場合
-    if run_anq_data:
-        logger.info("アンケートデータ処理を実行します")
-        anq_success = process_anq_data(matching_ids)
-        if not anq_success:
-            logger.warning("アンケートデータの取得に失敗したため、PORTERSへのインポートをスキップします")
-            return False
-    
-    logger.info("=" * 80)
-    logger.info("処理ブロック3: PORTERSへのデータインポートを開始します")
-    logger.info("=" * 80)
-    
-    # PORTERSにインポート
-    logger.info("CSVファイルをPORTERSにインポートします")
-    
-    if import_to_porters():
-        logger.info("✅ PORTERSへのデータインポートが完了しました")
-        logger.info("=" * 80)
-        logger.info("処理ブロック3: PORTERSへのデータインポートが完了しました")
-        logger.info("=" * 80)
-        return True
-    else:
-        logger.error("❌ PORTERSへのデータインポートに失敗しました")
-        logger.info("=" * 80)
-        logger.info("処理ブロック3: PORTERSへのデータインポートが失敗しました")
-        logger.info("=" * 80)
+    try:
+        logger.info("=== PORTERSへのデータインポート処理を開始します ===")
+        
+        # IDが指定されていない場合は、最新のCSVファイルを使用
+        if not matching_ids:
+            csv_path = os.path.join(env.get_project_root(), "output", "anq_data_latest.csv")
+            
+            # CSVファイルの存在確認
+            if not os.path.exists(csv_path):
+                logger.error(f"CSVファイルが見つかりません: {csv_path}")
+                return False
+            
+            logger.info(f"IDが指定されていないため、最新のCSVファイルを使用します: {csv_path}")
+        else:
+            # IDが指定されている場合は、従来通りの処理
+            logger.info(f"指定されたID: {matching_ids}")
+            
+            # アンケートデータ分析を実行する場合
+            if run_anq_data:
+                if not process_anq_data(matching_ids):
+                    logger.error("アンケートデータ分析に失敗したため、インポート処理を中止します")
+                    return False
+            
+            # CSVファイルのパスを取得
+            csv_path = os.path.join(env.get_project_root(), "output", "anq_data.csv")
+        
+        # インポート処理を実行
+        result = import_to_porters(csv_path)
+        
+        if result:
+            logger.info("✅ PORTERSへのデータインポート処理が完了しました")
+        else:
+            logger.error("❌ PORTERSへのデータインポート処理に失敗しました")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"PORTERSへのデータインポート処理中にエラーが発生しました: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
 
 def run_all():
@@ -184,13 +195,14 @@ def run_all():
     
     # 処理ブロック2: アンケートデータの取得とCSV出力
     if matching_ids:
-        anq_success = process_anq_data(matching_ids)
+        anq_success, csv_path = process_anq_data(matching_ids)
     else:
         logger.warning("一致するIDがないため、後続の処理をスキップします")
         anq_success = False
+        csv_path = None
     
     # 処理ブロック3: PORTERSへのデータインポート
-    if anq_success:
+    if anq_success and csv_path:
         porters_success = process_porters_import()
     else:
         logger.warning("アンケートデータの取得に失敗したため、PORTERSへのインポートをスキップします")
@@ -239,13 +251,6 @@ if __name__ == "__main__":
             logger.error("設定のロードに失敗したため、処理を中止します")
             sys.exit(1)
         
-        # スプレッドシートへの接続をテスト
-        spreadsheet = get_spreadsheet_connection()
-        if not spreadsheet:
-            logger.error("スプレッドシートへの接続に失敗したため、処理を中止します")
-            sys.exit(1)
-        logger.info("スプレッドシートへの接続テストに成功しました")
-        
         # IDリストの処理
         ids_list = None
         if args.ids:
@@ -269,7 +274,7 @@ if __name__ == "__main__":
             process_anq_data(ids_list)
         elif args.block == 3:
             # 処理ブロック3: PORTERSへのデータインポート
-            process_porters_import(run_anq_data=(ids_list is not None), matching_ids=ids_list)
+            process_porters_import()
         else:
             logger.error("実行する処理ブロックが指定されていません")
             sys.exit(1)

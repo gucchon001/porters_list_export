@@ -114,12 +114,7 @@ if "%INTERACTIVE%"=="true" (
         )
     )
     if "!PROCESS!"=="3" (
-        set /p "IDS=Enter target IDs (comma-separated, optional): "
-        if not "!IDS!"=="" (
-            set "SCRIPT_ARGS=--block 3 --ids !IDS!"
-        ) else (
-            set "SCRIPT_ARGS=--block 3"
-        )
+        set "SCRIPT_ARGS=--block 3"
     )
     if "!PROCESS!"=="4" set "SCRIPT_ARGS=--all"
     

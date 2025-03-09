@@ -13,6 +13,7 @@ import traceback
 from ...utils.environment import EnvironmentUtils as env
 from ...utils.logging_config import get_logger
 from ..common.settings import load_sheet_settings
+from ..common.spreadsheet import get_spreadsheet_connection
 
 logger = get_logger(__name__)
 
@@ -43,15 +44,15 @@ class AnqDataAnalysis:
         logger.info(f"出力ディレクトリを作成しました: {self.output_dir}")
         
         # サービスアカウントファイルのパスを取得
-        self.service_account_file = env.get_config_value("GOOGLE_SHEETS", "SERVICE_ACCOUNT_FILE")
+        self.service_account_file = env.get_service_account_file()
         logger.info(f"サービスアカウントファイル: {self.service_account_file}")
         
         # スプレッドシートIDの取得
-        self.spreadsheet_id = env.get_config_value("GOOGLE_SHEETS", "SPREADSHEET_ID")
+        self.spreadsheet_id = env.get_config_value("SPREADSHEET", "SSID")
         logger.info(f"スプレッドシートID: {self.spreadsheet_id}")
         
-        # シート名の取得
-        self.anq_data_key = env.get_config_value("SHEET_NAMES", "ANQ_DATA")
+        # シート名の取得（キーのみ保存）
+        self.anq_data_key = env.get_config_value("SHEET_NAMES", "ANQ_DATA").strip('"')
         logger.info(f"アンケートデータキー: {self.anq_data_key}")
         
         # 対象IDの設定
@@ -76,23 +77,56 @@ class AnqDataAnalysis:
         try:
             logger.info("Google Spreadsheetへの接続を開始します")
             
-            # サービスアカウントの認証情報を取得
-            scope = ['https://spreadsheets.google.com/feeds',
-                     'https://www.googleapis.com/auth/drive']
-            credentials = Credentials.from_service_account_file(
-                self.service_account_file, scopes=scope)
+            # 共通のスプレッドシート接続を使用
+            self.spreadsheet = get_spreadsheet_connection()
+            if not self.spreadsheet:
+                logger.error("スプレッドシートへの接続に失敗しました")
+                return False
             
-            # gspreadクライアントを作成
-            self.gc = gspread.authorize(credentials)
-            logger.info("✓ Google Sheets APIに接続しました")
+            logger.info(f"✓ スプレッドシート '{self.spreadsheet.title}' に接続しました")
             
-            # スプレッドシートを開く
-            self.spreadsheet = self.gc.open_by_key(self.spreadsheet_id)
-            logger.info(f"✓ スプレッドシート '{self.spreadsheet.title}' を開きました")
+            # settings.pyを使用してシート名を取得
+            # アンケートデータシートは他のシートと一緒に取得されないため、別途処理
+            try:
+                # settingsシートを取得
+                settings_sheet = self.spreadsheet.worksheet('settings')
+                logger.info(f"✓ settingsシートを取得しました")
+                
+                # 設定値を取得
+                data = settings_sheet.get_all_values()
+                logger.info(f"settingsシートのデータ行数: {len(data)}")
+                
+                # 設定値を辞書に変換（ヘッダー行をスキップ）
+                settings = {row[0]: row[1] for row in data[1:] if len(row) >= 2}
+                logger.info(f"設定マッピング: {settings}")
+                
+                # アンケートデータシートの実際の名前を取得
+                if self.anq_data_key in settings:
+                    anq_sheet_name = settings[self.anq_data_key]
+                    logger.info(f"✓ アンケートデータ実際のシート名: {anq_sheet_name}")
+                else:
+                    logger.warning(f"❌ 設定キー '{self.anq_data_key}' が settingsシートに見つかりません")
+                    logger.warning(f"利用可能な設定: {settings}")
+                    logger.warning(f"キー '{self.anq_data_key}' をそのままシート名として使用します")
+                    anq_sheet_name = self.anq_data_key
+            
+            except Exception as e:
+                logger.warning(f"設定の読み込み中にエラーが発生しました: {str(e)}")
+                logger.warning(f"キー '{self.anq_data_key}' をそのままシート名として使用します")
+                anq_sheet_name = self.anq_data_key
             
             # アンケートDLデータシートを取得
-            self.anq_data_sheet = self.spreadsheet.worksheet(self.anq_data_key)
-            logger.info(f"✓ '{self.anq_data_key}' シートを取得しました")
+            try:
+                self.anq_data_sheet = self.spreadsheet.worksheet(anq_sheet_name)
+                logger.info(f"✓ '{anq_sheet_name}' シートを取得しました")
+            except gspread.exceptions.WorksheetNotFound:
+                logger.error(f"❌ シート '{anq_sheet_name}' が見つかりません")
+                # 利用可能なシート一覧を表示
+                all_worksheets = self.spreadsheet.worksheets()
+                logger.info("利用可能なシート一覧:")
+                for i, worksheet in enumerate(all_worksheets):
+                    logger.info(f"  {i+1}. {worksheet.title}")
+                return False
             
             return True
             
@@ -103,58 +137,63 @@ class AnqDataAnalysis:
     
     def get_anq_data(self):
         """
-        アンケートDLデータから指定されたIDのレコードを取得する
+        アンケートデータを取得する
         
         Returns:
-            bool: データ取得に成功した場合はTrue、失敗した場合はFalse
+            bool: 取得に成功した場合はTrue、失敗した場合はFalse
         """
         try:
             logger.info(f"{len(self.target_ids)}件のIDに対するアンケートデータを取得します")
+            logger.info(f"検索対象ID: {self.target_ids}")
             
-            if not self.anq_data_sheet:
-                logger.error("アンケートDLデータシートが取得されていません")
-                return False
+            # スプレッドシートからデータを取得
+            all_data = self.anq_data_sheet.get_all_values()
+            logger.info(f"スプレッドシートから取得した全データ行数: {len(all_data)}")
             
-            # すべてのデータを取得
-            all_values = self.anq_data_sheet.get_all_values()
-            if not all_values:
-                logger.error("アンケートDLデータが空です")
+            if not all_data or len(all_data) <= 1:
+                logger.error("スプレッドシートからデータを取得できませんでした")
                 return False
             
             # ヘッダー行を取得
-            headers = all_values[0]
+            headers = all_data[0]
             logger.info(f"ヘッダー行: {headers}")
             
-            # ID列のインデックスを取得
-            id_col_index = None
-            for i, header in enumerate(headers):
-                if "ID" in header:
-                    id_col_index = i
-                    logger.info(f"ID列を見つけました: {header} (インデックス: {i})")
-                    break
+            # "回答者ID"列のインデックスを特定
+            id_column_name = "回答者ID"
             
-            if id_col_index is None:
-                logger.error("ID列が見つかりませんでした")
+            if id_column_name not in headers:
+                logger.error(f"'{id_column_name}'列が見つかりません。ヘッダー: {headers}")
                 return False
             
-            # 対象IDのレコードを抽出
-            records = []
-            for row in all_values[1:]:  # ヘッダー行をスキップ
-                if row[id_col_index] in self.target_ids:
-                    record = {}
-                    for i, value in enumerate(row):
-                        record[headers[i]] = value
-                    records.append(record)
+            id_column_index = headers.index(id_column_name)
+            logger.info(f"'{id_column_name}'列を見つけました (インデックス: {id_column_index})")
             
-            logger.info(f"取得したレコード数: {len(records)}")
+            # 対象IDに一致する行を抽出
+            matching_rows = []
+            for row in all_data[1:]:  # ヘッダー行をスキップ
+                if id_column_index < len(row):
+                    row_id = row[id_column_index]
+                    # IDが文字列として保存されている可能性があるため、文字列に変換して比較
+                    if str(row_id) in [str(target_id) for target_id in self.target_ids]:
+                        matching_rows.append(row)
+                        logger.info(f"一致するIDを持つ行を見つけました: {row_id}")
             
-            # 取得したデータをDataFrameに変換
-            self.data_df = pd.DataFrame(records)
+            logger.info(f"取得したレコード数: {len(matching_rows)}")
+            
+            if not matching_rows:
+                # 最初の10行のIDを表示して確認
+                sample_ids = [row[id_column_index] if id_column_index < len(row) else "N/A" for row in all_data[1:11]]
+                logger.warning(f"指定されたID {self.target_ids} に一致するデータが見つかりませんでした")
+                logger.warning(f"スプレッドシートの最初の10行のID: {sample_ids}")
+                # 空のDataFrameを作成
+                self.data_df = pd.DataFrame(columns=headers)
+            else:
+                # DataFrameを作成
+                self.data_df = pd.DataFrame(matching_rows, columns=headers)
+            
             logger.info(f"DataFrame作成完了: {self.data_df.shape[0]}行 x {self.data_df.shape[1]}列")
-            
-            # DataFrameの先頭5行を表示
             logger.info("=== DataFrame先頭5行 ===")
-            logger.info(self.data_df.head().to_string())
+            logger.info(self.data_df.head())
             
             return True
             
@@ -210,8 +249,8 @@ class AnqDataAnalysis:
                 os.symlink(csv_path, latest_csv_path)
                 logger.info(f"最新のCSVファイルへのシンボリックリンクを作成しました: {latest_csv_path}")
             
-            # 環境変数にCSVファイルパスを設定
-            env.set_config_value("PORTERS", "IMPORT_CSV_PATH", "output/anq_data_latest.csv")
+            # 環境変数にCSVファイルパスを設定する代わりに、相対パスを記録
+            logger.info("CSVファイルパス 'output/anq_data_latest.csv' を後続の処理で使用します")
             
             return csv_path
             
@@ -257,42 +296,40 @@ class AnqDataAnalysis:
 
 def analyze_anq_data(target_ids):
     """
-    アンケートデータ分析を実行する関数
+    アンケートデータを分析してCSVファイルに出力する
     
     Args:
         target_ids (list): 分析対象のIDリスト
         
     Returns:
-        tuple: (bool, pandas.DataFrame) 処理結果とデータフレーム。失敗した場合は (False, None)
+        tuple: (成功したかどうか, CSVファイルのパス)
     """
     try:
-        logger.info("=" * 80)
-        logger.info("アンケートデータ分析を開始します")
-        logger.info("=" * 80)
+        logger.info(f"{len(target_ids)}件のIDに対するアンケートデータ分析を開始します")
         
-        if not target_ids:
-            logger.warning("分析対象のIDが指定されていません")
-            return False, None
-        
-        logger.info(f"分析対象のID数: {len(target_ids)}")
-        for i, id_value in enumerate(target_ids):
-            logger.info(f"  ID {i+1}: {id_value}")
-        
+        # アンケートデータ分析クラスのインスタンスを作成
         analyzer = AnqDataAnalysis(target_ids)
-        result = analyzer.run()
         
-        if result:
-            logger.info("✅ アンケートデータ分析が正常に完了しました")
-            logger.info("=" * 80)
-            return True, analyzer.data_df
-        else:
-            logger.error("❌ アンケートデータ分析に失敗しました")
-            logger.info("=" * 80)
+        # スプレッドシートに接続
+        if not analyzer.connect_to_spreadsheet():
+            logger.error("スプレッドシートへの接続に失敗しました")
             return False, None
+        
+        # アンケートデータを取得
+        if not analyzer.get_anq_data():
+            logger.error("アンケートデータの取得に失敗しました")
+            return False, None
+        
+        # CSVファイルに保存
+        csv_path = analyzer.save_to_csv(analyzer.data_df)
+        if not csv_path:
+            logger.error("CSVファイルの保存に失敗しました")
+            return False, None
+        
+        logger.info(f"✅ アンケートデータの分析とCSV出力が完了しました: {csv_path}")
+        return True, csv_path
         
     except Exception as e:
-        logger.error(f"予期せぬエラーが発生しました: {str(e)}")
+        logger.error(f"アンケートデータの分析中にエラーが発生しました: {str(e)}")
         logger.error(traceback.format_exc())
-        logger.error(f"❌ エラーが発生しました: {str(e)}")
-        logger.info("=" * 80)
         return False, None 

@@ -56,19 +56,17 @@ class Browser:
                         self.selectors[page] = {}
                     
                     self.selectors[page][element] = {
-                        'description': row.get('description', ''),
-                        'action_type': row.get('action_type', ''),
-                        'selector_type': row.get('selector_type', ''),
-                        'selector_value': row.get('selector_value', ''),
-                        'element_type': row.get('element_type', ''),
-                        'parent_selector': row.get('parent_selector', '')
+                        'description': row['description'],
+                        'action_type': row['action_type'],
+                        'selector_type': row['selector_type'],
+                        'selector_value': row['selector_value'],
+                        'element_type': row['element_type'],
+                        'parent_selector': row['parent_selector']
                     }
-            
-            logger.info(f"セレクタCSVファイルを読み込みました: {csv_path}")
-            logger.info(f"読み込んだページ数: {len(self.selectors)}")
+            logger.info(f"セレクタを読み込みました: {len(self.selectors)} ページ")
             return True
         except Exception as e:
-            logger.error(f"セレクタCSVファイルの読み込みに失敗しました: {str(e)}")
+            logger.error(f"セレクタの読み込みに失敗しました: {str(e)}")
             return False
     
     def setup(self, headless=False):
@@ -87,6 +85,46 @@ class Browser:
             service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             self.wait = WebDriverWait(self.driver, 10)  # 10秒のタイムアウト
+            
+            # セレクタが不足している場合、デフォルト値を設定
+            if not self.selectors or 'porters' not in self.selectors:
+                logger.warning("PORTERSのセレクタ情報が見つかりません。デフォルト値を使用します。")
+                self.selectors['porters'] = {
+                    'company_id': {
+                        'selector_type': 'CSS_SELECTOR',
+                        'selector_value': "#Model_LoginForm_company_login_id"
+                    },
+                    'username': {
+                        'selector_type': 'CSS_SELECTOR',
+                        'selector_value': "#Model_LoginForm_login_id"
+                    },
+                    'password': {
+                        'selector_type': 'CSS_SELECTOR',
+                        'selector_value': "#Model_LoginForm_password"
+                    },
+                    'login_button': {
+                        'selector_type': 'CSS_SELECTOR',
+                        'selector_value': "#yt0"
+                    }
+                }
+                
+            # porters_menuがなければ初期化
+            if 'porters_menu' not in self.selectors:
+                logger.warning("PORTERSメニューのセレクタ情報が見つかりません。デフォルト値を使用します。")
+                self.selectors['porters_menu'] = {
+                    'import_menu': {
+                        'selector_type': 'CSS_SELECTOR',
+                        'selector_value': "#main-menu-id-5 > a"
+                    },
+                    'menu_item_5': {
+                        'selector_type': 'CSS_SELECTOR',
+                        'selector_value': "#main-menu-id-5 > a"
+                    },
+                    'search_button': {
+                        'selector_type': 'CSS_SELECTOR',
+                        'selector_value': "#main > div > main > section.original-search > header > div.others > button"
+                    }
+                }
             
             logger.info("WebDriverのセットアップが完了しました")
             return True
@@ -112,21 +150,16 @@ class Browser:
                 return None
             
             selector_info = self.selectors[page][element_name]
-            selector_type = selector_info['selector_type']
+            selector_type = selector_info['selector_type'].upper()  # 大文字に変換
             selector_value = selector_info['selector_value']
             
-            # セレクタタイプに基づいて要素を検索
-            if selector_type == 'css':
-                element = self.driver.find_element(By.CSS_SELECTOR, selector_value)
-            elif selector_type == 'xpath':
-                element = self.driver.find_element(By.XPATH, selector_value)
-            elif selector_type == 'id':
-                element = self.driver.find_element(By.ID, selector_value)
-            elif selector_type == 'name':
-                element = self.driver.find_element(By.NAME, selector_value)
-            else:
-                logger.error(f"未対応のセレクタタイプ: {selector_type}")
-                return None
+            logger.info(f"要素を探索: {page}.{element_name} ({selector_type}: {selector_value})")
+            
+            # セレクタタイプに基づいて要素を検索 (By クラスの属性として使用)
+            by_type = getattr(By, selector_type)
+            element = WebDriverWait(self.driver, 10).until(
+                EC.visibility_of_element_located((by_type, selector_value))
+            )
             
             logger.info(f"要素を取得しました: ページ={page}, 要素={element_name}")
             return element

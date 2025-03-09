@@ -4,6 +4,10 @@ import time
 from pathlib import Path
 import traceback
 
+# プロジェクトのルートディレクトリをPYTHONPATHに追加
+root_dir = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.append(str(root_dir))
+
 from ...utils.environment import EnvironmentUtils as env
 from ...utils.logging_config import get_logger
 from .browser import Browser
@@ -37,7 +41,16 @@ class Importer:
             self.browser = Browser(selectors_path=selectors_path)
             
             # ブラウザのセットアップ
-            headless_mode = env.get_config_value("BROWSER", "HEADLESS", "False").lower() == "true"
+            headless_value = env.get_config_value("BROWSER", "HEADLESS", "False")
+            
+            # 文字列か真偽値かを確認して適切に処理
+            if isinstance(headless_value, bool):
+                headless_mode = headless_value
+            else:
+                headless_mode = headless_value.lower() == "true"
+            
+            logger.info(f"ヘッドレスモード設定: {headless_mode}")
+            
             if not self.browser.setup(headless=headless_mode):
                 logger.error("ブラウザのセットアップに失敗しました")
                 return False
@@ -98,9 +111,60 @@ class Importer:
             logger.error(traceback.format_exc())
             return False
 
-def import_to_porters():
+def import_to_porters(csv_path=None, headless=False):
     """
     PORTERSにCSVファイルをインポートする関数
+    
+    Args:
+        csv_path (str, optional): インポートするCSVファイルのパス。
+                                 指定がない場合は設定ファイルから取得
+        headless (bool, optional): ヘッドレスモードを有効にするかどうか
+    
+    Returns:
+        bool: インポートが成功した場合はTrue、失敗した場合はFalse
     """
-    importer = Importer()
-    return importer.execute() 
+    try:
+        logger.info("=== PORTERSへのCSVインポート処理を開始します ===")
+        
+        # 環境変数のロード
+        env.load_env()
+        
+        # CSVファイルの存在確認
+        if csv_path and not os.path.exists(csv_path):
+            logger.error(f"指定されたCSVファイルが存在しません: {csv_path}")
+            return False
+        
+        # ブラウザのセットアップ
+        browser = Browser()
+        if not browser.setup(headless=headless):
+            logger.error("ブラウザのセットアップに失敗しました")
+            return False
+        
+        try:
+            # ログイン処理
+            login = Login(browser)
+            if not login.execute():
+                logger.error("ログイン処理に失敗しました")
+                return False
+            
+            # CSVインポート処理
+            csv_import = CsvImport(browser)
+            if not csv_import.execute(csv_path):
+                logger.error("CSVインポート処理に失敗しました")
+                return False
+            
+            # ログアウト処理
+            login.logout()
+            
+            logger.info("✅ PORTERSへのCSVインポートが正常に完了しました")
+            return True
+            
+        finally:
+            # ブラウザを終了
+            browser.quit()
+            
+    except Exception as e:
+        logger.error(f"PORTERSへのCSVインポート処理中にエラーが発生しました: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False 
