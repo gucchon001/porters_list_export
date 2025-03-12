@@ -203,7 +203,7 @@ def run_all():
     
     # 処理ブロック3: PORTERSへのデータインポート
     if anq_success and csv_path:
-        porters_success = process_porters_import()
+        porters_success = process_porters_import(False, matching_ids)
     else:
         logger.warning("アンケートデータの取得に失敗したため、PORTERSへのインポートをスキップします")
         porters_success = False
@@ -241,6 +241,82 @@ def parse_arguments():
     
     return parser.parse_args()
 
+def main():
+    """メイン処理"""
+    try:
+        logger.info("================================================================================")
+        logger.info("相談フラグ管理システムを開始します")
+        logger.info("================================================================================")
+        
+        # 処理ブロック1: 相談フラグの確認と新規IDの抽出
+        logger.info("================================================================================")
+        logger.info("処理ブロック1: 相談フラグの確認と新規IDの抽出")
+        logger.info("================================================================================")
+        
+        # 相談フラグの確認と新規IDの抽出
+        matching_ids = process_consult_flags()
+        
+        # 新規IDが見つからなくても正常終了として扱う
+        if matching_ids is None:
+            logger.info("✅ 新規IDは見つかりませんでした。処理は正常に完了しました。")
+            logger.info("================================================================================")
+            logger.info("相談フラグ管理システムの処理結果サマリー")
+            logger.info("================================================================================")
+            logger.info("処理ブロック1: 相談フラグの確認と新規IDの抽出 - 成功")
+            logger.info("処理ブロック2: アンケートデータの取得とCSV出力 - スキップ (新規IDなし)")
+            logger.info("処理ブロック3: PORTERSへのデータインポート - スキップ (新規IDなし)")
+            logger.info("================================================================================")
+            logger.info("✅ すべての処理が正常に完了しました (新規IDなし)")
+            logger.info("相談フラグ管理システムの処理を終了します")
+            return True
+        
+        # 処理ブロック2: アンケートデータの取得とCSV出力
+        if matching_ids:
+            logger.info("================================================================================")
+            logger.info("処理ブロック2: アンケートデータの取得とCSV出力")
+            logger.info("================================================================================")
+            
+            anq_success, csv_path = process_anq_data(matching_ids)
+        else:
+            logger.warning("一致するIDがないため、後続の処理をスキップします")
+            anq_success = False
+            csv_path = None
+        
+        # 処理ブロック3: PORTERSへのデータインポート
+        if anq_success and csv_path:
+            logger.info("================================================================================")
+            logger.info("処理ブロック3: PORTERSへのデータインポート")
+            logger.info("================================================================================")
+            
+            porters_success = process_porters_import(False, matching_ids)
+        else:
+            logger.warning("アンケートデータの取得に失敗したため、PORTERSへのインポートをスキップします")
+            porters_success = False
+        
+        # 処理結果のサマリーを表示
+        logger.info("================================================================================")
+        logger.info("相談フラグ管理システムの処理結果サマリー")
+        logger.info("================================================================================")
+        logger.info(f"処理ブロック1: 相談フラグの確認と新規IDの抽出 - {'成功' if matching_ids else '失敗または該当なし'}")
+        logger.info(f"処理ブロック2: アンケートデータの取得とCSV出力 - {'成功' if anq_success else '失敗またはスキップ'}")
+        logger.info(f"処理ブロック3: PORTERSへのデータインポート - {'成功' if porters_success else '失敗またはスキップ'}")
+        logger.info("================================================================================")
+        
+        if matching_ids and anq_success and porters_success:
+            logger.info("✅ すべての処理が正常に完了しました")
+            return True
+        else:
+            logger.warning("⚠️ 一部の処理が失敗またはスキップされました")
+            return False
+            
+    except Exception as e:
+        logger.error(f"相談フラグ管理システムの実行中にエラーが発生しました: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False
+    finally:
+        logger.info("相談フラグ管理システムの処理を終了します")
+
 if __name__ == "__main__":
     try:
         # コマンドライン引数の解析
@@ -265,7 +341,7 @@ if __name__ == "__main__":
         # 処理ブロックの実行
         if args.all or (not args.block and not args.ids):
             # すべての処理ブロックを実行
-            run_all()
+            main()
         elif args.block == 1:
             # 処理ブロック1: 相談フラグの確認と新規IDの抽出
             process_consult_flags()

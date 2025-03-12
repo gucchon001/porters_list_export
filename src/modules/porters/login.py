@@ -138,61 +138,75 @@ class Login:
             logger.warning(f"二重ログインポップアップ処理中にエラーが発生しましたが、処理を継続します: {e}")
     
     def logout(self):
-        """明示的なログアウト処理を実行する"""
+        """ログアウト処理を実行する"""
         try:
             logger.info("=== ログアウト処理を開始します ===")
             
-            # 現在のURLをログに記録
+            # 現在のURLを記録
             current_url = self.browser.driver.current_url
             logger.info(f"ログアウト前のURL: {current_url}")
             
-            # スクリーンショット
+            # スクリーンショットを撮る
             self.browser.save_screenshot("before_logout.png")
             
-            # ログアウトボタンを探す
-            # まず、セレクタ情報を確認
-            logout_selector = None
-            if 'porters_menu' in self.browser.selectors and 'logout_button' in self.browser.selectors['porters_menu']:
-                logout_selector = self.browser.selectors['porters_menu']['logout_button']['selector_value']
-            
-            if not logout_selector:
-                # セレクタがない場合、一般的なログアウトボタンのセレクタを試す
+            # ユーザーメニューをクリック
+            try:
+                user_menu_selector = "#nav2-inner > div > ul > li.original-class-user > a > span"
+                user_menu = self.browser.driver.find_element(By.CSS_SELECTOR, user_menu_selector)
+                user_menu.click()
+                logger.info("✓ ユーザーメニューをクリックしました")
+                
+                # メニューが表示されるまで少し待機
+                time.sleep(2)
+                
+                # ログアウトオプションをクリック
+                logout_option_selector = "#porters-contextmenu-column_1 > ul > li:nth-child(6)"
+                logout_option = self.browser.driver.find_element(By.CSS_SELECTOR, logout_option_selector)
+                logout_option.click()
+                logger.info("✓ ログアウトオプションをクリックしました")
+                
+                # ログアウト完了を待機
+                time.sleep(3)
+                
+                # ログアウト後のスクリーンショット
+                self.browser.save_screenshot("after_logout.png")
+                
+                # ログアウト成功を確認（ログインページに戻っているか）
+                if "login" in self.browser.driver.current_url.lower():
+                    logger.info("✅ ログアウトに成功しました")
+                    return True
+                else:
+                    logger.warning("ログアウト後もログインページに戻っていません")
+                    return False
+                
+            except Exception as e:
+                logger.warning(f"指定セレクタでのログアウト処理に失敗: {e}")
+                
+                # 代替方法: 一般的なセレクタを試す
                 logger.info("ログアウトボタンのセレクタが設定されていません。一般的なセレクタを試します。")
-                possible_selectors = [
-                    'a[href*="logout"]', 
-                    'button[id*="logout"]', 
-                    'a[id*="logout"]',
-                    '.logout', 
-                    '#logout'
+                
+                # 様々なセレクタを試す
+                selectors = [
+                    ".logout", 
+                    "a.logout", 
+                    "a[href*='logout']",
+                    "button.logout",
+                    "#logout",
+                    "a:contains('ログアウト')",
+                    "a:contains('Logout')"
                 ]
                 
-                # 各セレクタを試す
-                for selector in possible_selectors:
+                for selector in selectors:
                     try:
-                        logout_elements = self.browser.driver.find_elements(By.CSS_SELECTOR, selector)
-                        if logout_elements:
-                            logger.info(f"ログアウトボタンを発見しました: {selector}")
-                            logout_selector = selector
-                            break
+                        elements = self.browser.driver.find_elements(By.CSS_SELECTOR, selector)
+                        if elements:
+                            elements[0].click()
+                            logger.info(f"✓ セレクタ '{selector}' でログアウトボタンをクリックしました")
+                            time.sleep(3)
+                            return True
                     except:
                         continue
-            
-            if logout_selector:
-                # ログアウトボタンをクリック
-                try:
-                    logger.info(f"ログアウトボタンを探索: {logout_selector}")
-                    logout_button = WebDriverWait(self.browser.driver, 10).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, logout_selector))
-                    )
-                    logout_button.click()
-                    logger.info("✓ ログアウトボタンをクリックしました")
-                    time.sleep(3)
-                    return True
-                    
-                except Exception as e:
-                    logger.warning(f"ログアウト処理に失敗しましたが、処理を継続します: {str(e)}")
-                    return False
-            else:
+                
                 logger.warning("ログアウトボタンが見つかりませんでした")
                 return False
                 

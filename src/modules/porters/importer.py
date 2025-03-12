@@ -111,60 +111,58 @@ class Importer:
             logger.error(traceback.format_exc())
             return False
 
-def import_to_porters(csv_path=None, headless=False):
+def import_to_porters(run_anq_data=True, target_ids=None):
     """
-    PORTERSにCSVファイルをインポートする関数
+    PORTERSへのCSVインポート処理を実行する
     
     Args:
-        csv_path (str, optional): インポートするCSVファイルのパス。
-                                 指定がない場合は設定ファイルから取得
-        headless (bool, optional): ヘッドレスモードを有効にするかどうか
-    
+        run_anq_data (bool): アンケートデータ取得処理を実行するかどうか
+        target_ids (list): 対象のID一覧
+        
     Returns:
-        bool: インポートが成功した場合はTrue、失敗した場合はFalse
+        bool: 処理が成功したかどうか
     """
+    logger.info("=== PORTERSへのCSVインポート処理を開始します ===")
+    
+    # CSVファイルのパスを設定
+    csv_file_path = os.path.join("output", "anq_data_latest.csv")
+    
+    # 絶対パスに変換
+    absolute_csv_path = os.path.abspath(csv_file_path)
+    
+    # CSVファイルが存在するか確認
+    if not os.path.exists(absolute_csv_path):
+        logger.error(f"指定されたCSVファイルが存在しません: {absolute_csv_path}")
+        return False
+    
+    # 環境変数のロード
+    env.load_env()
+    
+    # ブラウザのセットアップ
+    browser = Browser()
+    if not browser.setup(headless=False):
+        logger.error("ブラウザのセットアップに失敗しました")
+        return False
+    
     try:
-        logger.info("=== PORTERSへのCSVインポート処理を開始します ===")
-        
-        # 環境変数のロード
-        env.load_env()
-        
-        # CSVファイルの存在確認
-        if csv_path and not os.path.exists(csv_path):
-            logger.error(f"指定されたCSVファイルが存在しません: {csv_path}")
+        # ログイン処理
+        login = Login(browser)
+        if not login.execute():
+            logger.error("ログイン処理に失敗しました")
             return False
         
-        # ブラウザのセットアップ
-        browser = Browser()
-        if not browser.setup(headless=headless):
-            logger.error("ブラウザのセットアップに失敗しました")
+        # CSVインポート処理
+        csv_import = CsvImport(browser)
+        if not csv_import.execute(absolute_csv_path):
+            logger.error("CSVインポート処理に失敗しました")
             return False
         
-        try:
-            # ログイン処理
-            login = Login(browser)
-            if not login.execute():
-                logger.error("ログイン処理に失敗しました")
-                return False
-            
-            # CSVインポート処理
-            csv_import = CsvImport(browser)
-            if not csv_import.execute(csv_path):
-                logger.error("CSVインポート処理に失敗しました")
-                return False
-            
-            # ログアウト処理
-            login.logout()
-            
-            logger.info("✅ PORTERSへのCSVインポートが正常に完了しました")
-            return True
-            
-        finally:
-            # ブラウザを終了
-            browser.quit()
-            
-    except Exception as e:
-        logger.error(f"PORTERSへのCSVインポート処理中にエラーが発生しました: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return False 
+        # ログアウト処理
+        login.logout()
+        
+        logger.info("✅ PORTERSへのCSVインポートが正常に完了しました")
+        return True
+        
+    finally:
+        # ブラウザを終了
+        browser.quit() 

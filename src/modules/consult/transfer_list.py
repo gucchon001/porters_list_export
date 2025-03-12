@@ -19,9 +19,10 @@ def update_consult_transfer_list(matching_ids):
         if not spreadsheet:
             return False
         
-        # シート設定を読み込む
-        _, _, transfer_sheet_name = load_sheet_settings(spreadsheet)
+        # シート設定を読み込む（4つの値を正しく受け取る）
+        friend_sheet_name, consult_sheet_name, transfer_sheet_name, _ = load_sheet_settings(spreadsheet)
         if not transfer_sheet_name:
+            logger.error("❌ 相談転記先シート名の取得に失敗しました")
             return False
         
         # 相談転記先リストシートを取得

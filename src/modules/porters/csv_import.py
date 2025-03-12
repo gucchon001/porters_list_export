@@ -24,54 +24,61 @@ class CsvImport:
         self.browser = browser
         self.screenshot_dir = browser.screenshot_dir
     
-    def execute(self, csv_path=None):
-        """CSVインポート処理を実行"""
+    def execute(self, csv_file_path=None):
+        """
+        CSVインポート処理を実行する
+        """
         try:
             logger.info("=== CSVインポート処理を開始します ===")
             
-            if not csv_path:
-                # 環境変数からCSVパスを取得
-                csv_path = env.get_env_var('CSV_PATH')
-                if not csv_path:
-                    logger.error("CSVファイルのパスが指定されていません")
-                    return False
+            # CSVファイルパスが指定されていない場合は、インスタンス変数を使用
+            if csv_file_path is None:
+                csv_file_path = self.csv_file_path
             
-            # CSVファイルの存在確認
-            if not os.path.exists(csv_path):
-                logger.error(f"指定されたCSVファイルが存在しません: {csv_path}")
+            logger.info(f"インポートするCSVファイル: {csv_file_path}")
+            
+            # インポートメニューを開く
+            if not self._open_import_menu():
+                logger.error("インポートメニューを開けませんでした")
                 return False
             
-            logger.info(f"インポートするCSVファイル: {csv_path}")
-            
-            # インポートメニューを探す - 複数の方法を試す
-            if not self.find_and_click_import_menu():
-                logger.error("インポートメニューが見つかりませんでした")
-                return False
-            
-            # インポート前のスクリーンショット
-            self.browser.save_screenshot("before_import.png")
-            
-            # ファイルアップロード処理
-            if not self.upload_csv_file(csv_path):
+            # ファイルをアップロード
+            if not self._upload_csv_file(csv_file_path):
                 logger.error("CSVファイルのアップロードに失敗しました")
                 return False
             
-            # インポート方法の選択（必要に応じて）
-            if not self.select_import_method():
-                logger.warning("インポート方法の選択に失敗しましたが、処理を続行します")
+            # インポート方法を選択
+            if not self._select_import_method():
+                logger.error("インポート方法の選択に失敗しました")
+                return False
             
-            # 「次へ」ボタンのクリック
-            if not self.click_next_button():
+            # 「次へ」ボタンをクリック
+            if not self._click_next_button():
                 logger.error("「次へ」ボタンのクリックに失敗しました")
                 return False
             
-            # インポート実行ボタンのクリック
-            if not self.click_import_button():
+            # 3秒待機して画面遷移を確認
+            time.sleep(3)
+            
+            # 現在のURLを確認
+            current_url = self.browser.driver.current_url
+            logger.info(f"「次へ」ボタンクリック後のURL: {current_url}")
+            
+            # スクリーンショットを取得
+            self.browser.save_screenshot("after_next_button.png")
+            
+            # ダイアログが閉じてしまった場合（カレンダー画面に戻った場合）
+            if "calendar" in current_url and not self._is_import_dialog_visible():
+                logger.error("インポートダイアログが閉じてしまいました。処理が中断されました。")
+                return False
+            
+            # インポート実行ボタンをクリック
+            if not self._click_import_button():
                 logger.error("インポート実行ボタンのクリックに失敗しました")
                 return False
             
-            # インポート結果の確認
-            if not self.check_import_result():
+            # インポート結果を確認
+            if not self._check_import_result():
                 logger.error("インポート結果の確認に失敗しました")
                 return False
             
@@ -84,9 +91,43 @@ class CsvImport:
             logger.error(traceback.format_exc())
             self.browser.save_screenshot("csv_import_error.png")
             return False
-    
-    def find_and_click_import_menu(self):
-        """インポートメニューを探して開く"""
+
+    def _is_import_dialog_visible(self):
+        """
+        インポートダイアログが表示されているかを確認する
+        """
+        try:
+            # ダイアログの存在を確認
+            dialogs = self.browser.driver.find_elements(By.CSS_SELECTOR, ".ui-dialog")
+            if not dialogs:
+                logger.warning("画面上にダイアログが見つかりません")
+                return False
+            
+            # ダイアログのタイトルを確認
+            for dialog in dialogs:
+                try:
+                    title_elem = dialog.find_element(By.CSS_SELECTOR, ".ui-dialog-title")
+                    title = title_elem.text
+                    if "求職者 - インポート" in title:
+                        logger.info(f"インポートダイアログを確認: {title}")
+                        return True
+                except:
+                    continue
+            
+            # HTMLを保存して後で分析できるようにする
+            html_path = os.path.join(self.browser.screenshot_dir, "dialog_check.html")
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(self.browser.driver.page_source)
+            
+            logger.warning("インポートダイアログが見つかりません")
+            return False
+            
+        except Exception as e:
+            logger.error(f"ダイアログ確認中にエラー: {str(e)}")
+            return False
+
+    def _open_import_menu(self):
+        """インポートメニューを開く"""
         try:
             logger.info("インポートメニューを探索します")
             
@@ -117,7 +158,7 @@ class CsvImport:
             self.browser.save_screenshot("import_menu_error.png")
             return False
     
-    def upload_csv_file(self, csv_path):
+    def _upload_csv_file(self, csv_path):
         """CSVファイルをアップロードする"""
         try:
             # 方法1: 直接input[type="file"]要素を探す
@@ -186,7 +227,7 @@ class CsvImport:
             self.browser.save_screenshot("file_upload_error.png")
             return False
     
-    def select_import_method(self):
+    def _select_import_method(self):
         """インポート方法を選択する（LINE初回アンケート取込）"""
         try:
             logger.info("=== インポート方法の選択処理を開始 ===")
@@ -235,65 +276,61 @@ class CsvImport:
             self.browser.save_screenshot("import_method_error.png")
             return False
     
-    def click_next_button(self):
-        """「次へ」ボタンをクリック"""
+    def _click_next_button(self):
+        """「次へ」ボタンをクリックする"""
         try:
             logger.info("=== 「次へ」ボタンのクリック処理を開始 ===")
             
-            # スクリーンショットで状態を確認
+            # スクリーンショットを取得
             self.browser.save_screenshot("before_next_button.png")
             
+            # 方法1: 直接ボタンを探す
             try:
-                # ダイアログのボタンパネルを特定
-                dialog = self.browser.driver.find_element(By.CSS_SELECTOR, ".ui-dialog")
-                button_pane = dialog.find_element(By.CSS_SELECTOR, ".ui-dialog-buttonpane")
-                logger.info("ダイアログのボタンパネルを見つけました")
-                
-                # ボタンパネル内のすべてのボタン要素を取得
+                # ボタンパネルを探す
+                button_pane = self.browser.driver.find_element(By.CSS_SELECTOR, ".ui-dialog-buttonpane")
                 buttons = button_pane.find_elements(By.TAG_NAME, "button")
-                logger.info(f"ボタンパネル内のボタン数: {len(buttons)}")
                 
-                # 各ボタンの情報をログに記録
+                # ボタンの情報をログに出力
                 for i, btn in enumerate(buttons):
-                    try:
-                        logger.info(f"ボタン {i+1}: テキスト='{btn.text}', クラス={btn.get_attribute('class')}")
-                    except:
-                        logger.info(f"ボタン {i+1}: [情報取得不可]")
+                    logger.info(f"ボタン {i+1}: テキスト='{btn.text}', クラス={btn.get_attribute('class')}")
                 
-                if len(buttons) >= 2:
-                    # 2番目（インデックス1）のボタンが「次へ」
-                    next_button = buttons[1]  # インデックスは0始まり
-                    
-                    # スクロールして表示（standalone_testと同様）
+                # 「次へ」ボタンを探す
+                next_button = None
+                for btn in buttons:
+                    if btn.text == "次へ":
+                        next_button = btn
+                        break
+                
+                if next_button:
+                    # スクロールして表示
                     self.browser.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_button)
                     time.sleep(1)
                     
-                    # JavaScriptでクリック
-                    self.browser.driver.execute_script("arguments[0].click();", next_button)
-                    logger.info("✓ 2番目のボタン（「次へ」）をJavaScriptでクリックしました")
-                    time.sleep(3)
+                    # クリック
+                    next_button.click()
+                    logger.info("✓ 「次へ」ボタンをクリックしました")
                     
-                    # クリック後のスクリーンショット
-                    self.browser.save_screenshot("after_next_button.png")
-                    return True
-                else:
-                    # ボタンが少ない場合の対処
-                    logger.warning(f"期待するボタン数が見つかりません。見つかったボタン数: {len(buttons)}")
+                    # 画面遷移を待機（長めに設定）
+                    time.sleep(10)
                     
-                    # 最後の手段：一番右側のボタン（通常は「次へ」や「確定」）をクリック
-                    if buttons:
-                        rightmost_button = buttons[-1]
-                        self.browser.driver.execute_script("arguments[0].click();", rightmost_button)
-                        logger.info("✓ 一番右側のボタンをクリックしました")
-                        time.sleep(3)
+                    # 画面3への遷移を確認（より柔軟な条件）
+                    page_source = self.browser.driver.page_source
+                    if "求職者 - インポート (3/4)" in page_source or "インポート (3" in page_source:
+                        logger.info("✓ 画面3への遷移を確認しました")
+                        self.browser.save_screenshot("screen3_displayed.png")
                         return True
                     else:
-                        raise Exception("クリック可能なボタンが見つかりません")
-            
+                        logger.warning("画面3への遷移を確認できませんでした")
+                        # HTMLを保存して後で分析
+                        with open("screen_after_next.html", "w", encoding="utf-8") as f:
+                            f.write(page_source)
+                else:
+                    logger.warning("「次へ」ボタンが見つかりませんでした")
             except Exception as e:
                 logger.warning(f"ボタンパネルからのボタン検索に失敗: {e}")
-                
-                # 最終手段：JavaScriptで直接実行（test_csv_importと同様）
+            
+            # 方法2: JavaScriptで直接実行
+            try:
                 logger.info("JavaScriptで直接2番目のボタンをクリックします")
                 script = """
                 var buttonPane = document.querySelector('.ui-dialog-buttonpane');
@@ -309,21 +346,49 @@ class CsvImport:
                 result = self.browser.driver.execute_script(script)
                 if result:
                     logger.info("✓ JavaScriptで2番目のボタンのクリックに成功しました")
-                    time.sleep(3)
-                    return True
+                    time.sleep(10)  # 長めに待機
+                    
+                    # 画面3への遷移を確認（より柔軟な条件）
+                    page_source = self.browser.driver.page_source
+                    if "求職者 - インポート (3/4)" in page_source or "インポート (3" in page_source:
+                        logger.info("✓ 画面3への遷移を確認しました")
+                        self.browser.save_screenshot("screen3_displayed.png")
+                        return True
+                    else:
+                        logger.warning("JavaScriptでのクリック後も画面3への遷移を確認できませんでした")
+                        # HTMLを保存して後で分析
+                        with open("screen_after_js_next.html", "w", encoding="utf-8") as f:
+                            f.write(page_source)
                 else:
                     logger.warning("JavaScriptでのクリックも失敗しました")
+            except Exception as js_error:
+                logger.error(f"JavaScriptでのクリックにも失敗: {js_error}")
             
-            # 「次へ」ボタンが見つからない場合は警告を出して続行
-            logger.warning("「次へ」ボタンが見つかりませんでした。この画面では不要かもしれません。")
+            # 現在のURLを確認
+            current_url = self.browser.driver.current_url
+            logger.info(f"現在のURL: {current_url}")
+            
+            # カレンダー画面に戻ってしまった場合
+            if "calendar" in current_url:
+                logger.error("ボタンクリック後にカレンダー画面に戻ってしまいました")
+                self.browser.save_screenshot("calendar_redirect.png")
+                return False
+            
+            # 画面状態を確認
+            self.browser.save_screenshot("after_next_button.png")
+            
+            # すべての方法が失敗した場合
+            logger.error("すべての方法で画面2の「次へ」ボタンのクリックに失敗しました")
             return False
-            
+        
         except Exception as e:
-            logger.warning(f"「次へ」ボタンのクリック中にエラーが発生しました: {str(e)}")
+            logger.error(f"「次へ」ボタンのクリック中にエラーが発生しました: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             self.browser.save_screenshot("next_button_error.png")
             return False
     
-    def click_import_button(self):
+    def _click_import_button(self):
         """インポート実行ボタンをクリックする"""
         try:
             logger.info("=== インポート実行ボタンのクリック処理を開始 ===")
@@ -336,7 +401,7 @@ class CsvImport:
             self.browser.save_screenshot("before_import_button.png")
             
             # HTMLを保存して詳細分析
-            html_path = os.path.join(self.screenshot_dir, "import_dialog.html")
+            html_path = os.path.join(self.browser.screenshot_dir, "import_dialog.html")
             with open(html_path, 'w', encoding='utf-8') as f:
                 f.write(self.browser.driver.page_source)
             logger.info(f"現在の画面HTMLを保存しました: {html_path}")
@@ -378,124 +443,233 @@ class CsvImport:
                         except:
                             logger.info(f"ボタン {i+1}: [情報取得不可]")
                     
-                    if len(buttons) >= 1:
-                        # 最後のボタンが「インポート」または「取込」
-                        import_button = buttons[-1]  # 最後のボタン
-                        
-                        # スクロールして表示
-                        self.browser.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", import_button)
-                        time.sleep(1)
-                        
-                        # JavaScriptでクリック
-                        self.browser.driver.execute_script("arguments[0].click();", import_button)
-                        logger.info(f"✓ 最後のボタン（'{import_button.text}'）をJavaScriptでクリックしました")
-                        time.sleep(5)  # インポート処理の完了を待つ
-                        
-                        # クリック後のスクリーンショット
-                        self.browser.save_screenshot("after_import_button.png")
-                        return True
+                    # 「実行」ボタンを探す
+                    import_button = None
+                    for btn in buttons:
+                        if btn.text == "実行":
+                            import_button = btn
+                            break
+                    
+                    if import_button:
+                        # ボタンが無効化されていないか確認
+                        if "ui-button-disabled" in import_button.get_attribute("class"):
+                            logger.warning("「実行」ボタンが無効化されています。「次へ」ボタンをクリックして画面4に進みます。")
+                            
+                            # 「次へ」ボタンを探す
+                            next_button = None
+                            for btn in buttons:
+                                if btn.text == "次へ":
+                                    next_button = btn
+                                    break
+                            
+                            if next_button:
+                                # スクロールして表示
+                                self.browser.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_button)
+                                time.sleep(1)
+                                
+                                # クリック
+                                next_button.click()
+                                logger.info("✓ 画面3の「次へ」ボタンをクリックしました")
+                                
+                                # 画面遷移を待機
+                                time.sleep(10)
+                                
+                                # 画面4への遷移を確認
+                                if "求職者 - インポート (4/4)" in self.browser.driver.page_source or "インポート (4" in self.browser.driver.page_source:
+                                    logger.info("✓ 画面4への遷移を確認しました")
+                                    self.browser.save_screenshot("screen4_displayed.png")
+                                    
+                                    # 画面4で「実行」ボタンを探す
+                                    return self._click_execute_button_on_screen4()
+                                else:
+                                    logger.warning("画面4への遷移を確認できませんでした")
+                            else:
+                                logger.warning("「次へ」ボタンが見つかりませんでした")
+                        else:
+                            # スクロールして表示
+                            self.browser.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", import_button)
+                            time.sleep(1)
+                            
+                            # クリック
+                            import_button.click()
+                            logger.info("✓ 「実行」ボタンをクリックしました")
+                            
+                            # 処理完了を待機
+                            time.sleep(5)
+                            
+                            # 結果を確認
+                            return self._check_import_result()
+                    else:
+                        logger.warning("「実行」ボタンが見つかりませんでした")
                 except Exception as e:
                     logger.warning(f"ボタンパネルからのボタン検索に失敗: {e}")
-            
-            # 方法2: JavaScriptで直接ダイアログのボタンを探してクリック
+            else:
+                logger.warning("ダイアログが見つかりません")
+        except Exception as e:
+            logger.warning(f"直接ボタン検索に失敗: {e}")
+        
+        # 方法2: JavaScriptで直接実行
+        try:
             logger.info("JavaScriptで直接ダイアログのボタンを探します")
             script = """
-            // すべてのダイアログを取得
             var dialogs = document.querySelectorAll('.ui-dialog');
             if (dialogs.length > 0) {
-                // 最後のダイアログ（最前面）を使用
                 var dialog = dialogs[dialogs.length - 1];
-                console.log('ダイアログID: ' + dialog.id);
-                
-                // ボタンパネルを探す
                 var buttonPane = dialog.querySelector('.ui-dialog-buttonpane');
                 if (buttonPane) {
-                    // すべてのボタンを取得
                     var buttons = buttonPane.querySelectorAll('button');
-                    console.log('ボタン数: ' + buttons.length);
-                    
-                    if (buttons.length > 0) {
-                        // 最後のボタン（通常は「インポート」）をクリック
-                        var lastButton = buttons[buttons.length - 1];
-                        console.log('クリックするボタン: ' + lastButton.textContent);
-                        lastButton.click();
-                        return true;
+                    // 「実行」ボタンを探す
+                    for (var i = 0; i < buttons.length; i++) {
+                        if (buttons[i].textContent.trim() === '実行') {
+                            if (!buttons[i].classList.contains('ui-button-disabled')) {
+                                buttons[i].click();
+                                return 'execute';
+                            }
+                        }
                     }
-                } else {
-                    // ボタンパネルが見つからない場合、ダイアログ内のすべてのボタンを探す
-                    var allButtons = dialog.querySelectorAll('button');
-                    if (allButtons.length > 0) {
-                        // 最後のボタンをクリック
-                        allButtons[allButtons.length - 1].click();
-                        return true;
+                    // 「次へ」ボタンを探す
+                    for (var i = 0; i < buttons.length; i++) {
+                        if (buttons[i].textContent.trim() === '次へ') {
+                            buttons[i].click();
+                            return 'next';
+                        }
                     }
                 }
             }
-            
-            // ダイアログが見つからない場合、ページ全体からボタンを探す
-            var importButtons = Array.from(document.querySelectorAll('button')).filter(function(btn) {
-                var text = btn.textContent.toLowerCase();
-                return text.includes('インポート') || text.includes('取込') || text.includes('import');
-            });
-            
-            if (importButtons.length > 0) {
-                importButtons[0].click();
-                return true;
-            }
-            
             return false;
             """
-            
             result = self.browser.driver.execute_script(script)
             if result:
-                logger.info("✓ JavaScriptでボタンのクリックに成功しました")
-                time.sleep(5)  # インポート処理の完了を待つ
+                logger.info(f"✓ JavaScriptでボタンのクリックに成功しました: {result}")
                 
-                # クリック後のスクリーンショット
-                self.browser.save_screenshot("after_js_import_button.png")
-                return True
+                # 処理完了を待機
+                time.sleep(10)
+                
+                if result == 'next':
+                    # 画面4への遷移を確認
+                    if "求職者 - インポート (4/4)" in self.browser.driver.page_source or "インポート (4" in self.browser.driver.page_source:
+                        logger.info("✓ 画面4への遷移を確認しました")
+                        self.browser.save_screenshot("screen4_displayed.png")
+                        
+                        # 画面4で「実行」ボタンを探す
+                        return self._click_execute_button_on_screen4()
+                    else:
+                        logger.warning("画面4への遷移を確認できませんでした")
+                else:
+                    # 結果を確認
+                    return self._check_import_result()
+            else:
+                logger.warning("JavaScriptでのボタンクリックも失敗しました")
+        except Exception as js_error:
+            logger.error(f"JavaScriptでのクリックにも失敗: {js_error}")
+        
+        # スクリーンショットを取得
+        self.browser.save_screenshot("after_js_import_button.png")
+        
+        # すべての方法が失敗した場合
+        logger.error("すべての方法でインポート実行ボタンのクリックに失敗しました")
+        return False
+    
+    def _click_execute_button_on_screen4(self):
+        """画面4の「実行」ボタンをクリックする"""
+        try:
+            logger.info("=== 画面4の「実行」ボタンのクリック処理を開始 ===")
             
-            # 方法3: 最終手段 - 画面上のすべてのボタンを調査
-            logger.info("最終手段: 画面上のすべてのボタンを調査します")
-            all_buttons = self.browser.driver.find_elements(By.TAG_NAME, 'button')
-            logger.info(f"画面上のボタン総数: {len(all_buttons)}")
+            # スクリーンショットを取得
+            self.browser.save_screenshot("before_execute_button.png")
             
-            # インポート関連のボタンを探す
-            import_buttons = []
-            for btn in all_buttons:
-                try:
-                    btn_text = btn.text.lower()
-                    if 'インポート' in btn_text or '取込' in btn_text or 'import' in btn_text:
-                        import_buttons.append(btn)
-                        logger.info(f"インポート関連ボタンを検出: '{btn.text}'")
-                except:
-                    continue
+            # 方法1: 直接ボタンを探す
+            try:
+                # ダイアログの状態を確認
+                dialogs = self.browser.driver.find_elements(By.CSS_SELECTOR, ".ui-dialog")
+                
+                if dialogs:
+                    # 最後のダイアログ（最前面）を使用
+                    dialog = dialogs[-1]
+                    
+                    # ボタンパネルを探す
+                    button_pane = dialog.find_element(By.CSS_SELECTOR, ".ui-dialog-buttonpane")
+                    buttons = button_pane.find_elements(By.TAG_NAME, "button")
+                    
+                    # ボタンの情報をログに出力
+                    for i, btn in enumerate(buttons):
+                        logger.info(f"ボタン {i+1}: テキスト='{btn.text}', クラス={btn.get_attribute('class')}")
+                    
+                    # 「実行」ボタンを探す
+                    execute_button = None
+                    for btn in buttons:
+                        if btn.text == "実行":
+                            execute_button = btn
+                            break
+                    
+                    if execute_button:
+                        # スクロールして表示
+                        self.browser.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", execute_button)
+                        time.sleep(1)
+                        
+                        # クリック
+                        execute_button.click()
+                        logger.info("✓ 画面4の「実行」ボタンをクリックしました")
+                        
+                        # 処理完了を待機
+                        time.sleep(5)
+                        
+                        # 結果を確認
+                        return self._check_import_result()
+                    else:
+                        logger.warning("「実行」ボタンが見つかりませんでした")
+            except Exception as e:
+                logger.warning(f"ボタンパネルからのボタン検索に失敗: {e}")
             
-            if import_buttons:
-                # 最初のインポートボタンをクリック
-                self.browser.driver.execute_script("arguments[0].click();", import_buttons[0])
-                logger.info(f"✓ インポート関連ボタン '{import_buttons[0].text}' をクリックしました")
-                time.sleep(5)
-                return True
-            elif all_buttons:
-                # 最後のボタンをクリック（最後のボタンが通常「確定」や「インポート」）
-                self.browser.driver.execute_script("arguments[0].click();", all_buttons[-1])
-                logger.info("✓ 画面上の最後のボタンをクリックしました")
-                time.sleep(5)
-                return True
+            # 方法2: JavaScriptで直接実行
+            try:
+                logger.info("JavaScriptで直接「実行」ボタンをクリックします")
+                script = """
+                var dialogs = document.querySelectorAll('.ui-dialog');
+                if (dialogs.length > 0) {
+                    var dialog = dialogs[dialogs.length - 1];
+                    var buttonPane = dialog.querySelector('.ui-dialog-buttonpane');
+                    if (buttonPane) {
+                        var buttons = buttonPane.querySelectorAll('button');
+                        for (var i = 0; i < buttons.length; i++) {
+                            if (buttons[i].textContent.trim() === '実行') {
+                                buttons[i].click();
+                                return true;
+                            }
+                        }
+                    }
+                }
+                return false;
+                """
+                result = self.browser.driver.execute_script(script)
+                if result:
+                    logger.info("✓ JavaScriptで「実行」ボタンのクリックに成功しました")
+                    
+                    # 処理完了を待機
+                    time.sleep(5)
+                    
+                    # 結果を確認
+                    return self._check_import_result()
+                else:
+                    logger.warning("JavaScriptでの「実行」ボタンクリックも失敗しました")
+            except Exception as js_error:
+                logger.error(f"JavaScriptでのクリックにも失敗: {js_error}")
             
-            logger.error("インポート実行ボタンが見つかりませんでした")
-            self.browser.save_screenshot("import_button_not_found.png")
+            # スクリーンショットを取得
+            self.browser.save_screenshot("after_execute_button.png")
+            
+            # すべての方法が失敗した場合
+            logger.error("すべての方法で画面4の「実行」ボタンのクリックに失敗しました")
             return False
-            
+        
         except Exception as e:
-            logger.error(f"インポート実行ボタンのクリック中にエラーが発生しました: {str(e)}")
+            logger.error(f"画面4の「実行」ボタンのクリック中にエラーが発生しました: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
-            self.browser.save_screenshot("import_button_error.png")
+            self.browser.save_screenshot("execute_button_error.png")
             return False
-    
-    def check_import_result(self):
+
+    def _check_import_result(self):
         """インポート結果を確認する"""
         try:
             # インポート後のスクリーンショット
@@ -506,10 +680,152 @@ class CsvImport:
             
             # 成功メッセージを探す
             success_patterns = ["成功", "完了", "インポートが完了", "正常に取り込まれました", "success", "completed"]
+            success_found = False
             for pattern in success_patterns:
                 if pattern in page_source:
                     logger.info(f"✅ インポート成功メッセージを確認: '{pattern}'")
-                    return True
+                    success_found = True
+                    break
+            
+            if success_found:
+                # 成功メッセージが見つかった場合、OKボタンをクリック
+                try:
+                    logger.info("インポート完了後の「OK」ボタンを探します")
+                    
+                    # OKボタンを探す (複数の方法で試行)
+                    ok_button = None
+                    ok_button_clicked = False
+                    
+                    # 方法1: 直接ボタンを探す
+                    try:
+                        # 方法1-1: 特定のセレクタで探す
+                        try:
+                            ok_button_selector = "#pageCalendar > div.ui-dialog.ui-widget.ui-widget-content.ui-corner-all.ui-front.p-ui-messagebox.ui-dialog-buttons.ui-draggable > div.ui-dialog-buttonpane.ui-widget-content.ui-helper-clearfix > div > button"
+                            ok_button = self.browser.driver.find_element(By.CSS_SELECTOR, ok_button_selector)
+                            logger.info("✓ 特定セレクタでOKボタンを発見しました")
+                        except:
+                            logger.info("特定セレクタでOKボタンが見つかりませんでした")
+                        
+                        # 方法1-2: テキストで探す
+                        if not ok_button:
+                            buttons = self.browser.driver.find_elements(By.TAG_NAME, "button")
+                            for btn in buttons:
+                                if btn.text.strip() in ["OK", "Ok", "ok"]:
+                                    ok_button = btn
+                                    logger.info("✓ テキスト検索でOKボタンを発見しました")
+                                    break
+                        
+                        # 方法1-3: メッセージボックス内のボタンを探す
+                        if not ok_button:
+                            try:
+                                message_box = self.browser.driver.find_element(By.CSS_SELECTOR, ".p-ui-messagebox")
+                                if message_box:
+                                    message_buttons = message_box.find_elements(By.TAG_NAME, "button")
+                                    if message_buttons:
+                                        ok_button = message_buttons[0]  # 最初のボタンを使用
+                                        logger.info("✓ メッセージボックス内でOKボタンを発見しました")
+                            except:
+                                logger.info("メッセージボックス内でOKボタンが見つかりませんでした")
+                        
+                        # 方法1-4: クラスで探す
+                        if not ok_button:
+                            ok_buttons = self.browser.driver.find_elements(By.CSS_SELECTOR, ".ui-button.ui-widget.ui-state-default.ui-corner-all.ui-button-text-only")
+                            if ok_buttons:
+                                for btn in ok_buttons:
+                                    if btn.is_displayed() and btn.is_enabled():
+                                        ok_button = btn
+                                        logger.info("✓ クラス検索でOKボタンを発見しました")
+                                        break
+                        
+                        if ok_button:
+                            # スクロールして表示
+                            self.browser.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", ok_button)
+                            time.sleep(1)
+                            
+                            # クリック
+                            ok_button.click()
+                            logger.info("✓ インポート完了後の「OK」ボタンをクリックしました")
+                            time.sleep(3)  # クリック後の処理を待機
+                            ok_button_clicked = True
+                        else:
+                            logger.warning("インポート完了後の「OK」ボタンが見つかりませんでした")
+                    except Exception as e:
+                        logger.warning(f"「OK」ボタンの検索に失敗: {e}")
+                    
+                    # 方法2: JavaScriptで直接実行
+                    if not ok_button_clicked:
+                        try:
+                            logger.info("JavaScriptで直接「OK」ボタンをクリックします")
+                            script = """
+                            // 特定のセレクタでOKボタンを探す
+                            var specificButton = document.querySelector("#pageCalendar > div.ui-dialog.ui-widget.ui-widget-content.ui-corner-all.ui-front.p-ui-messagebox.ui-dialog-buttons.ui-draggable > div.ui-dialog-buttonpane.ui-widget-content.ui-helper-clearfix > div > button");
+                            if (specificButton) {
+                                specificButton.click();
+                                return true;
+                            }
+                            
+                            // メッセージボックス内のボタンを探す
+                            var messageBox = document.querySelector(".p-ui-messagebox");
+                            if (messageBox) {
+                                var messageButtons = messageBox.querySelectorAll("button");
+                                if (messageButtons.length > 0) {
+                                    messageButtons[0].click();
+                                    return true;
+                                }
+                            }
+                            
+                            // 表示されているボタンを探す
+                            var buttons = document.querySelectorAll('button');
+                            for (var i = 0; i < buttons.length; i++) {
+                                var btn = buttons[i];
+                                if (btn.textContent.trim().toLowerCase() === 'ok' && 
+                                    btn.offsetParent !== null && 
+                                    !btn.disabled) {
+                                    btn.click();
+                                    return true;
+                                }
+                            }
+                            
+                            // ダイアログ内のボタンを探す
+                            var dialogs = document.querySelectorAll('.ui-dialog');
+                            if (dialogs.length > 0) {
+                                for (var j = 0; j < dialogs.length; j++) {
+                                    var dialog = dialogs[j];
+                                    var dialogButtons = dialog.querySelectorAll('button');
+                                    for (var k = 0; k < dialogButtons.length; k++) {
+                                        var dialogBtn = dialogButtons[k];
+                                        if (dialogBtn.offsetParent !== null && !dialogBtn.disabled) {
+                                            dialogBtn.click();
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                            return false;
+                            """
+                            result = self.browser.driver.execute_script(script)
+                            if result:
+                                logger.info("✓ JavaScriptでインポート完了後のボタンクリックに成功しました")
+                                time.sleep(3)  # クリック後の処理を待機
+                                ok_button_clicked = True
+                            else:
+                                logger.warning("JavaScriptでのボタンクリックも失敗しました")
+                        except Exception as js_error:
+                            logger.error(f"JavaScriptでのクリックにも失敗: {js_error}")
+                    
+                    # 最終確認のスクリーンショット
+                    self.browser.save_screenshot("after_ok_button.png")
+                    
+                    # OKボタンがクリックできなかった場合はエラーとする
+                    if not ok_button_clicked:
+                        logger.error("❌ インポート完了後の「OK」ボタンをクリックできませんでした")
+                        return False
+                    
+                except Exception as ok_error:
+                    logger.error(f"「OK」ボタンクリック処理中にエラー: {ok_error}")
+                    return False
+                
+                return True
             
             # エラーメッセージを探す
             error_patterns = ["エラー", "失敗", "error", "failed"]
@@ -768,5 +1084,348 @@ class CsvImport:
             logger.error(f"ファイル選択処理中にエラーが発生しました: {str(e)}")
             self.browser.save_screenshot("file_select_error.png")
             return False
+
+    # 「次へ」ボタンをクリックして次の画面に進む関数
+    def click_next_button_and_wait(self, current_screen, next_screen):
+        """「次へ」ボタンをクリックして次の画面に遷移するのを待つ"""
+        logger.info(f"=== 画面{current_screen}から画面{next_screen}への遷移処理を開始 ===")
+        
+        # スクリーンショットを撮る
+        self.browser.take_screenshot(f"before_next_button_screen{current_screen}")
+        
+        try:
+            # ボタンパネルを探す
+            button_pane = self.browser.find_element(By.CSS_SELECTOR, ".ui-dialog-buttonpane")
+            # 「次へ」ボタンを探す
+            next_button = button_pane.find_element(By.XPATH, ".//button[text()='次へ']")
+            next_button.click()
+            logger.info(f"✓ 画面{current_screen}の「次へ」ボタンをクリックしました")
+        except Exception as e:
+            logger.warning(f"ボタンパネルからのボタン検索に失敗: {e}")
+            logger.info("JavaScriptで直接2番目のボタンをクリックします")
+            try:
+                self.browser.execute_script("""
+                    var buttons = document.querySelectorAll('.ui-dialog-buttonpane button');
+                    if (buttons.length >= 2) {
+                        buttons[1].click();
+                    }
+                """)
+                logger.info("✓ JavaScriptで2番目のボタンのクリックに成功しました")
+            except Exception as js_error:
+                logger.error(f"JavaScriptでのボタンクリックに失敗: {js_error}")
+                return False
+        
+        # 次の画面への遷移を待つ
+        expected_title = f"求職者 - インポート ({next_screen}/4)"
+        try:
+            WebDriverWait(self.browser.driver, 10).until(
+                lambda driver: expected_title in driver.page_source
+            )
+            logger.info(f"✓ 画面{next_screen}への遷移を確認しました")
+            self.browser.take_screenshot(f"screen{next_screen}_displayed")
+            return True
+        except Exception as e:
+            logger.warning(f"画面{next_screen}への遷移を確認できませんでした: {e}")
+            return False
+
+    # 実行ボタンをクリックする処理
+    def click_execute_button(self):
+        """実行ボタンをクリックする"""
+        logger.info("=== インポート実行ボタンのクリック処理を開始 ===")
+        
+        # 現在のURLをログに記録
+        logger.info(f"現在のURL: {self.browser.driver.current_url}")
+        
+        # スクリーンショットを撮る
+        self.browser.take_screenshot("before_import_button")
+        
+        # 現在の画面のHTMLを保存
+        html_path = os.path.join("logs", "screenshots", "import_dialog.html")
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(self.browser.driver.page_source)
+        logger.info(f"現在の画面HTMLを保存しました: {os.path.abspath(html_path)}")
+        
+        # 画面上のダイアログを探す
+        dialogs = self.browser.find_elements(By.CSS_SELECTOR, ".ui-dialog")
+        logger.info(f"画面上のダイアログ数: {len(dialogs)}")
+        
+        # 最後のダイアログを操作対象とする
+        dialog = dialogs[-1]
+        logger.info(f"操作対象ダイアログ: ID={dialog.get_attribute('id')}, クラス={dialog.get_attribute('class')}")
+        
+        # ダイアログのタイトルを取得
+        title_element = dialog.find_element(By.CSS_SELECTOR, ".ui-dialog-title")
+        logger.info(f"ダイアログタイトル: {title_element.text}")
+        
+        # 現在の画面を確認
+        current_screen = 0
+        for i in range(1, 5):
+            if f"求職者 - インポート ({i}/4)" in title_element.text:
+                current_screen = i
+                break
+        
+        logger.info(f"現在の画面: {current_screen}/4")
+        
+        # 画面4（最終確認画面）でない場合は、画面4まで進める
+        if current_screen < 4:
+            logger.info(f"画面{current_screen}を検出しました。画面4まで進みます")
+            
+            # 画面2から画面3へ
+            if current_screen == 2:
+                if not self.click_next_button_for_screen2():
+                    logger.error("画面3への遷移に失敗しました")
+                    return False
+                current_screen = 3
+            
+            # 画面3から画面4へ
+            if current_screen == 3:
+                if not self.click_next_button_and_wait(3, 4):
+                    logger.error("画面4への遷移に失敗しました")
+                    return False
+            
+            # 画面4に遷移したので、再度ダイアログを取得
+            dialogs = self.browser.find_elements(By.CSS_SELECTOR, ".ui-dialog")
+            dialog = dialogs[-1]
+        
+        # ボタンパネルを探す
+        try:
+            button_pane = dialog.find_element(By.CSS_SELECTOR, ".ui-dialog-buttonpane")
+            logger.info("ダイアログのボタンパネルを見つけました")
+            
+            # ボタンパネル内のボタンを全て取得
+            buttons = button_pane.find_elements(By.TAG_NAME, "button")
+            logger.info(f"ボタンパネル内のボタン数: {len(buttons)}")
+            
+            # 各ボタンの情報をログに出力
+            for i, button in enumerate(buttons, 1):
+                logger.info(f"ボタン {i}: テキスト='{button.text}', クラス={button.get_attribute('class')}")
+            
+            # 「実行」ボタンを探す
+            execute_button = None
+            for button in buttons:
+                if button.text == "実行" and "ui-state-disabled" not in button.get_attribute("class"):
+                    execute_button = button
+                    break
+            
+            if execute_button:
+                execute_button.click()
+                logger.info("✓ 「実行」ボタンをクリックしました")
+            else:
+                logger.warning("有効な「実行」ボタンが見つかりませんでした")
+                return False
+            
+        except Exception as e:
+            logger.warning(f"ボタンパネルからのボタン検索に失敗: {e}")
+            logger.info("JavaScriptで直接ダイアログのボタンを探します")
+            
+            try:
+                # JavaScriptで「実行」ボタンをクリック
+                self.browser.execute_script("""
+                    var dialogs = document.querySelectorAll('.ui-dialog');
+                    var dialog = dialogs[dialogs.length - 1];
+                    var buttons = dialog.querySelectorAll('.ui-dialog-buttonpane button');
+                    for (var i = 0; i < buttons.length; i++) {
+                        if (buttons[i].textContent.trim() === '実行' && 
+                            !buttons[i].classList.contains('ui-state-disabled')) {
+                            buttons[i].click();
+                            return true;
+                        }
+                    }
+                    return false;
+                """)
+                logger.info("✓ JavaScriptでボタンのクリックに成功しました")
+            except Exception as js_error:
+                logger.error(f"JavaScriptでのボタンクリックに失敗: {js_error}")
+                return False
+        
+        # インポート完了を待つ
+        time.sleep(5)
+        self.browser.take_screenshot("after_import_button")
+        
+        return True
+
+    def click_next_button_for_screen2(self):
+        """画面2の「次へ」ボタンをクリック - スクロール対応版"""
+        logger.info("=== 画面2の「次へ」ボタンのクリック処理を開始 ===")
+        
+        # スクリーンショットを撮る
+        self.browser.take_screenshot("before_next_button_screen2")
+        
+        # 画面2が完全に読み込まれるのを待つ
+        try:
+            WebDriverWait(self.browser.driver, 10).until(
+                lambda driver: "求職者 - インポート (2/4)" in driver.page_source
+            )
+            logger.info("✓ 画面2の読み込みを確認しました")
+        except Exception as e:
+            logger.warning(f"画面2の読み込み確認に失敗: {e}")
+        
+        # 少し待機して画面が安定するのを待つ
+        time.sleep(2)
+        
+        # 方法1: ダイアログ全体を表示範囲内にスクロール
+        try:
+            logger.info("ダイアログ全体を表示範囲内にスクロールします")
+            self.browser.driver.execute_script("""
+                var dialog = document.querySelector('.ui-dialog');
+                if (dialog) {
+                    dialog.scrollIntoView({block: 'center', behavior: 'smooth'});
+                }
+            """)
+            time.sleep(1)
+        except Exception as e:
+            logger.warning(f"ダイアログへのスクロールに失敗: {e}")
+        
+        # 方法2: ボタンパネルを表示範囲内にスクロール
+        try:
+            logger.info("ボタンパネルを表示範囲内にスクロールします")
+            self.browser.driver.execute_script("""
+                var buttonPane = document.querySelector('.ui-dialog-buttonpane');
+                if (buttonPane) {
+                    buttonPane.scrollIntoView({block: 'end', behavior: 'smooth'});
+                }
+            """)
+            time.sleep(1)
+        except Exception as e:
+            logger.warning(f"ボタンパネルへのスクロールに失敗: {e}")
+        
+        # 方法3: ウィンドウサイズを調整
+        try:
+            logger.info("ウィンドウサイズを調整します")
+            original_size = self.browser.driver.get_window_size()
+            self.browser.driver.set_window_size(1200, 800)  # より大きなサイズに設定
+            time.sleep(1)
+        except Exception as e:
+            logger.warning(f"ウィンドウサイズの調整に失敗: {e}")
+        
+        # 方法4: ダイアログのサイズを調整
+        try:
+            logger.info("ダイアログのサイズを調整します")
+            self.browser.driver.execute_script("""
+                var dialog = document.querySelector('.ui-dialog');
+                if (dialog) {
+                    dialog.style.height = 'auto';
+                    dialog.style.maxHeight = '90vh';
+                }
+            """)
+            time.sleep(1)
+        except Exception as e:
+            logger.warning(f"ダイアログサイズの調整に失敗: {e}")
+        
+        # スクリーンショットを撮って状態を確認
+        self.browser.take_screenshot("after_scroll_adjustments")
+        
+        # 「次へ」ボタンをJavaScriptで直接クリック
+        try:
+            logger.info("JavaScriptで「次へ」ボタンを直接クリックします")
+            result = self.browser.driver.execute_script("""
+                // まず、ダイアログのタイトルで画面2を特定
+                var dialogs = document.querySelectorAll('.ui-dialog');
+                var targetDialog = null;
+                
+                for (var i = 0; i < dialogs.length; i++) {
+                    var title = dialogs[i].querySelector('.ui-dialog-title');
+                    if (title && title.textContent.includes('求職者 - インポート (2/4)')) {
+                        targetDialog = dialogs[i];
+                        break;
+                    }
+                }
+                
+                if (!targetDialog) {
+                    // タイトルが見つからない場合は最後のダイアログを使用
+                    targetDialog = dialogs[dialogs.length - 1];
+                }
+                
+                // ボタンパネルを探す
+                var buttonPane = targetDialog.querySelector('.ui-dialog-buttonpane');
+                if (!buttonPane) return false;
+                
+                // ボタンパネル内のすべてのボタンを取得
+                var buttons = buttonPane.querySelectorAll('button');
+                
+                // 「次へ」ボタンを探す
+                var nextButton = null;
+                for (var j = 0; j < buttons.length; j++) {
+                    if (buttons[j].textContent.trim() === '次へ') {
+                        nextButton = buttons[j];
+                        break;
+                    }
+                }
+                
+                // 「次へ」ボタンが見つからない場合は2番目のボタンを使用
+                if (!nextButton && buttons.length >= 2) {
+                    nextButton = buttons[1];
+                }
+                
+                if (nextButton) {
+                    // ボタンが見つかった場合、スクロールして表示してからクリック
+                    nextButton.scrollIntoView({block: 'center', behavior: 'smooth'});
+                    setTimeout(function() {
+                        nextButton.click();
+                    }, 500);
+                    return true;
+                }
+                
+                return false;
+            """)
+            
+            if result:
+                logger.info("✓ JavaScriptでの「次へ」ボタンのクリックに成功しました")
+                # クリック後に少し待機
+                time.sleep(3)
+                
+                # 画面3への遷移を確認
+                if "求職者 - インポート (3/4)" in self.browser.driver.page_source:
+                    logger.info("✓ 画面3への遷移を確認しました")
+                    self.browser.take_screenshot("screen3_displayed")
+                    return True
+                else:
+                    logger.warning("画面3への遷移が確認できませんでした")
+            else:
+                logger.warning("JavaScriptでの「次へ」ボタンのクリックに失敗しました")
+        except Exception as e:
+            logger.error(f"JavaScriptでの「次へ」ボタンのクリック中にエラー: {e}")
+        
+        # 最後の手段: タブキーでフォーカスを移動させてEnterキーを押す
+        try:
+            logger.info("タブキーとEnterキーを使用して「次へ」ボタンをクリックします")
+            
+            # アクティブな要素にフォーカスを当てる
+            active_element = self.browser.driver.switch_to.active_element
+            
+            # タブキーを複数回押して「次へ」ボタンにフォーカスを移動
+            for _ in range(10):  # 最大10回タブキーを押す
+                active_element.send_keys(Keys.TAB)
+                time.sleep(0.5)
+                
+                # 現在フォーカスされている要素のテキストを確認
+                focused_text = self.browser.driver.execute_script("return document.activeElement.textContent.trim();")
+                logger.info(f"現在フォーカスされている要素のテキスト: {focused_text}")
+                
+                if focused_text == "次へ":
+                    # 「次へ」ボタンにフォーカスが当たったらEnterキーを押す
+                    self.browser.driver.switch_to.active_element.send_keys(Keys.ENTER)
+                    logger.info("✓ 「次へ」ボタンにフォーカスを当ててEnterキーを押しました")
+                    time.sleep(3)
+                    
+                    # 画面3への遷移を確認
+                    if "求職者 - インポート (3/4)" in self.browser.driver.page_source:
+                        logger.info("✓ 画面3への遷移を確認しました")
+                        self.browser.take_screenshot("screen3_displayed")
+                        return True
+                    break
+        except Exception as e:
+            logger.error(f"タブキーとEnterキーを使用した方法でエラー: {e}")
+        
+        # ウィンドウサイズを元に戻す
+        try:
+            self.browser.driver.set_window_size(original_size['width'], original_size['height'])
+        except:
+            pass
+        
+        # すべての方法が失敗した場合
+        logger.error("すべての方法で画面2の「次へ」ボタンのクリックに失敗しました")
+        self.browser.take_screenshot("screen2_click_failed")
+        return False
 
 # import_to_porters() 関数は削除（importer.py に移動済み） 
