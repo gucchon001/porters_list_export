@@ -44,7 +44,8 @@ class SpreadsheetManager:
         self.sheet_names = {
             'users_all': self.config.get('SHEET_NAMES', 'USERSALL').strip('"\''),
             'entryprocess_all': self.config.get('SHEET_NAMES', 'ENTRYPROCESS').strip('"\''),
-            'logging': self.config.get('SHEET_NAMES', 'LOGSHEET').strip('"\'')
+            'logging': self.config.get('SHEET_NAMES', 'LOGSHEET').strip('"\''),
+            'count_users': self.config.get('SHEET_NAMES', 'COUNT_USERS').strip('"\'')
         }
         
         # 認証情報の設定

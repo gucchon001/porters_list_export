@@ -60,8 +60,8 @@ def parse_arguments():
     parser.add_argument('--skip-operations', action='store_true', help='業務操作をスキップする')
     parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], 
                         help='ログレベル (DEBUG, INFO, WARNING, ERROR, CRITICAL)')
-    parser.add_argument('--process', choices=['candidates', 'entryprocess'], default='candidates',
-                        help='実行する処理フロー (candidates: 求職者一覧のエクスポート, entryprocess: 選考プロセス一覧の表示)')
+    parser.add_argument('--process', choices=['candidates', 'entryprocess', 'both', 'sequential'], default='candidates',
+                        help='実行する処理フロー (candidates: 求職者一覧のエクスポート, entryprocess: 選考プロセス一覧の表示, both: 両方を順に実行, sequential: 求職者一覧処理後に選考プロセスも実行)')
     
     return parser.parse_args()
 
@@ -72,7 +72,7 @@ def main():
     以下の処理を実行します：
     1. 環境設定
     2. PORTERSシステムへのログイン
-    3. 選択された処理フローの実行（求職者一覧のエクスポートまたは選考プロセス一覧の表示）
+    3. 選択された処理フローの実行（求職者一覧のエクスポート、選考プロセス一覧の表示、または両方）
     4. ログアウト処理
     5. ブラウザの終了
     
@@ -136,22 +136,63 @@ def main():
                             logger.error("選考プロセス一覧の表示処理フローに失敗しました")
                         else:
                             logger.info("選考プロセス一覧の表示処理フローが正常に完了しました")
+                    elif args.process == 'both':
+                        # 両方の処理フローを順に実行
+                        logger.info("=== 両方の処理フローを順に実行します ===")
+                        
+                        # 求職者一覧の処理フロー
+                        logger.info("1. 求職者一覧のエクスポート処理フローを実行します")
+                        candidates_success = operations.execute_operations_flow()
+                        if not candidates_success:
+                            logger.error("求職者一覧のエクスポート処理フローに失敗しました")
+                        else:
+                            logger.info("求職者一覧のエクスポート処理フローが正常に完了しました")
+                        
+                        # 処理間の待機時間
+                        logger.info("次の処理に進む前に10秒間待機します")
+                        time.sleep(10)
+                        
+                        # 選考プロセスの処理フロー
+                        logger.info("2. 選考プロセス一覧の表示処理フローを実行します")
+                        entryprocess_success = operations.access_selection_processes()
+                        if not entryprocess_success:
+                            logger.error("選考プロセス一覧の表示処理フローに失敗しました")
+                        else:
+                            logger.info("選考プロセス一覧の表示処理フローが正常に完了しました")
+                        
+                        # 両方の処理結果をログに出力
+                        if candidates_success and entryprocess_success:
+                            logger.info("✅ 両方の処理フローが正常に完了しました")
+                        else:
+                            logger.warning("⚠️ 一部の処理フローが失敗しました")
+                    elif args.process == 'sequential':
+                        # 求職者一覧処理後に選考プロセスも実行
+                        logger.info("=== 求職者一覧処理後に選考プロセスも実行します ===")
+                        
+                        # PortersOperationsクラスの新しいメソッドを使用
+                        candidates_success, entryprocess_success = operations.execute_both_processes()
+                        
+                        # 両方の処理結果をログに出力
+                        if candidates_success and entryprocess_success:
+                            logger.info("✅ 両方の処理フローが正常に完了しました")
+                        else:
+                            logger.warning("⚠️ 一部の処理フローが失敗しました")
                     
                     # 操作完了後の待機時間
                     logger.info("操作完了後、5秒間待機します")
                     time.sleep(5)
                 
-                # ログアウト処理
-                if login:
-                    logger.info("ログアウト処理を開始します")
-                    try:
-                        logout_result = login.logout()
-                        if logout_result:
-                            logger.info("ログアウト処理が正常に完了しました")
-                        else:
-                            logger.warning("ログアウト処理に失敗しました")
-                    except Exception as e:
-                        logger.error(f"ログアウト処理中に例外が発生しました: {str(e)}")
+                    # ログアウト処理
+                    if login:
+                        logger.info("ログアウト処理を開始します")
+                        try:
+                            logout_result = login.logout()
+                            if logout_result:
+                                logger.info("ログアウト処理が正常に完了しました")
+                            else:
+                                logger.warning("ログアウト処理に失敗しました")
+                        except Exception as e:
+                            logger.error(f"ログアウト処理中に例外が発生しました: {str(e)}")
                 
                 logger.info("================================================================================")
                 logger.info("PORTERSシステムログインツールを正常に終了します")

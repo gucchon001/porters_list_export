@@ -18,6 +18,7 @@ from selenium.common.exceptions import TimeoutException, ElementClickIntercepted
 from pathlib import Path
 from typing import Optional
 import re
+import importlib.util
 
 from src.utils.logging_config import get_logger
 from src.utils.helpers import wait_for_new_csv_in_downloads, move_file_to_data_dir, find_latest_csv_in_downloads
@@ -656,14 +657,14 @@ class PortersOperations:
             logger.info(f"✓ CSVファイルをダウンロードしました: {csv_file_path}")
             
             # 設定ファイルからシート名を取得
-            entryprocess_sheet = env.get_config_value('SHEET_NAMES', 'ENTRYPROCESS', '"entryprocess_all"').strip('"')
-            logger.info(f"選考プロセスデータの転記先シート名: {entryprocess_sheet}")
+            candidates_sheet = env.get_config_value('SHEET_NAMES', 'CANDIDATES', '"users_all"').strip('"')
+            logger.info(f"求職者一覧データの転記先シート名: {candidates_sheet}")
             
             # スプレッドシートに転記
-            if self.import_csv_to_spreadsheet(csv_file_path, entryprocess_sheet):
-                logger.info(f"✓ CSVデータを{entryprocess_sheet}シートに転記しました")
+            if self.import_csv_to_spreadsheet(csv_file_path, candidates_sheet):
+                logger.info(f"✓ CSVデータを{candidates_sheet}シートに転記しました")
             else:
-                logger.error(f"CSVデータの{entryprocess_sheet}シートへの転記に失敗しました")
+                logger.error(f"CSVデータの{candidates_sheet}シートへの転記に失敗しました")
                 return False
             
             logger.info("✅ 候補者データのエクスポート処理が完了しました")
@@ -981,14 +982,14 @@ class PortersOperations:
     
     def execute_operations_flow(self):
         """
-        PORTERSシステムでの一連の業務操作を実行する
+        業務操作フローを実行する
         
         以下の処理を順番に実行します：
-        1. 求職者関連の共通処理フロー（「その他業務」ボタンクリックとメニュー項目5クリック）
+        1. 求職者関連の共通処理フロー（「その他業務」ボタンクリック、求職者メニュークリック）
         2. 「すべての求職者」リンクをクリック
-        3. 求職者一覧画面で「全てチェック」チェックボックスをクリック
+        3. 「全てチェック」チェックボックスをクリック
         4. 「もっと見る」ボタンを繰り返しクリックして、すべての求職者を表示
-        5. アクション一覧ボタンをクリックしてエクスポート処理を実行
+        5. 求職者データのエクスポート処理を実行
         
         Returns:
             bool: 処理が成功した場合はTrue、失敗した場合はFalse
@@ -1021,6 +1022,39 @@ class PortersOperations:
                 logger.error("求職者データのエクスポート処理に失敗しました")
                 return False
             
+            # スプレッドシートの集計処理を実行
+            try:
+                logger.info("スプレッドシートの集計処理を実行します")
+                
+                # テストモジュールをインポート
+                spec = importlib.util.spec_from_file_location(
+                    "test_count_users", 
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 
+                                "tests", "test_count_users.py")
+                )
+                count_users_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(count_users_module)
+                
+                # 集計処理を実行
+                test_count_users = count_users_module.TestCountUsers()
+                spreadsheet_manager = self.browser.spreadsheet_manager if hasattr(self.browser, 'spreadsheet_manager') else None
+                
+                if spreadsheet_manager is None:
+                    from src.utils.spreadsheet import SpreadsheetManager
+                    spreadsheet_manager = SpreadsheetManager()
+                    spreadsheet_manager.open_spreadsheet()
+                
+                result = test_count_users.count_users_by_phase(spreadsheet_manager)
+                if result:
+                    logger.info("スプレッドシートの集計処理が正常に完了しました")
+                else:
+                    logger.warning("スプレッドシートの集計処理に失敗しましたが、処理を継続します")
+            except Exception as e:
+                logger.error(f"スプレッドシートの集計処理中にエラーが発生しました: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                # 集計処理の失敗は全体の処理に影響を与えないようにする
+            
             logger.info("✅ 業務操作フローが正常に完了しました")
             return True
             
@@ -1030,12 +1064,66 @@ class PortersOperations:
             logger.error(traceback.format_exc())
             return False
     
+    def execute_both_processes(self):
+        """
+        求職者一覧と選考プロセスの両方の処理を順に実行する
+        
+        以下の処理を順番に実行します：
+        1. 求職者一覧の処理フロー
+        2. 選考プロセスの処理フロー
+        
+        Returns:
+            tuple: (求職者一覧の処理結果, 選考プロセスの処理結果)
+        """
+        try:
+            logger.info("=== 求職者一覧と選考プロセスの両方の処理を順に実行します ===")
+            
+            # 求職者一覧の処理フロー
+            logger.info("1. 求職者一覧のエクスポート処理フローを実行します")
+            candidates_success = self.execute_operations_flow()
+            if not candidates_success:
+                logger.error("求職者一覧のエクスポート処理フローに失敗しました")
+            else:
+                logger.info("求職者一覧のエクスポート処理フローが正常に完了しました")
+            
+            # 処理間の待機時間
+            logger.info("次の処理に進む前に10秒間待機します")
+            time.sleep(10)
+            
+            # 現在の画面の状態を確認
+            current_url = self.browser.driver.current_url
+            current_title = self.browser.driver.title
+            logger.info(f"現在のURL: {current_url}")
+            logger.info(f"現在の画面のタイトル: {current_title}")
+            
+            # 選考プロセスの処理フロー
+            logger.info("2. 選考プロセス一覧の表示処理フローを実行します")
+            entryprocess_success = self.access_selection_processes()
+            if not entryprocess_success:
+                logger.error("選考プロセス一覧の表示処理フローに失敗しました")
+            else:
+                logger.info("選考プロセス一覧の表示処理フローが正常に完了しました")
+            
+            # 両方の処理結果をログに出力
+            if candidates_success and entryprocess_success:
+                logger.info("✅ 両方の処理フローが正常に完了しました")
+            else:
+                logger.warning("⚠️ 一部の処理フローが失敗しました")
+            
+            return (candidates_success, entryprocess_success)
+            
+        except Exception as e:
+            logger.error(f"両方の処理フロー中にエラーが発生しました: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return (False, False)
+    
     def execute_common_selection_flow(self):
         """
         選考プロセス関連の共通処理フローを実行する
         
         以下の処理を順番に実行します：
-        1. 「その他業務」ボタンをクリックして新しいウィンドウを開く
+        1. 既に開いている「その他業務」画面で処理を続行
         
         Returns:
             bool: 処理が成功した場合はTrue、失敗した場合はFalse
@@ -1043,10 +1131,23 @@ class PortersOperations:
         try:
             logger.info("=== 選考プロセス関連の共通処理フローを開始します ===")
             
-            # 「その他業務」ボタンをクリック
-            if not self.click_other_operations_button():
-                logger.error("「その他業務」ボタンのクリック処理に失敗しました")
-                return False
+            # 現在のウィンドウハンドルを確認
+            current_handles = self.browser.driver.window_handles
+            logger.info(f"現在のウィンドウハンドル: {current_handles}")
+            
+            # 既に「その他業務」画面が開いていると想定して処理を続行
+            logger.info("既に開いている「その他業務」画面で処理を続行します")
+            
+            # 現在のURLを確認
+            current_url = self.browser.driver.current_url
+            logger.info(f"現在のURL: {current_url}")
+            
+            # 現在の画面のタイトルを確認
+            current_title = self.browser.driver.title
+            logger.info(f"現在の画面のタイトル: {current_title}")
+            
+            # スクリーンショットを取得
+            self.browser.save_screenshot("selection_process_common_flow.png")
             
             logger.info("✅ 選考プロセス関連の共通処理フローが正常に完了しました")
             return True
@@ -1063,7 +1164,7 @@ class PortersOperations:
         選考プロセス画面にアクセスする
         
         以下の処理を順番に実行します：
-        1. 選考プロセス関連の共通処理フロー（「その他業務」ボタンクリック）
+        1. 選考プロセス関連の共通処理フロー（既に開いている「その他業務」画面で処理を続行）
         2. メニューバーの「選考プロセス」をクリック
         3. 「すべての選考プロセス」リンクをクリック
         4. 「全てチェック」チェックボックスをクリック
@@ -2116,7 +2217,7 @@ class PortersOperations:
             
             # 設定ファイルからシート名を取得
             entryprocess_sheet = env.get_config_value('SHEET_NAMES', 'ENTRYPROCESS', '"entryprocess_all"').strip('"')
-            logger.info(f"選考プロセスデータの転記先シート名: {entryprocess_sheet}")
+            logger.info(f"選考プロセス一覧データの転記先シート名: {entryprocess_sheet}")
             
             # スプレッドシートに転記
             if self.import_csv_to_spreadsheet(csv_file_path, entryprocess_sheet):
