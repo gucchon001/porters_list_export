@@ -1,230 +1,51 @@
-import argparse
-import sys
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+PORTERSシステムへのログイン処理と二重ログイン回避を実装するメインスクリプト
+
+このスクリプトは、PORTERSシステムへのログイン処理と二重ログイン回避の機能を提供します。
+Seleniumを使用してブラウザを制御し、ログイン画面へのアクセス、認証情報の入力、
+ログインボタンのクリック、二重ログインポップアップの処理を行います。
+また、ログイン後に「その他業務」ボタンをクリックしてメニュー項目5を押す処理も実行します。
+"""
+
 import os
+import sys
+import time
+import argparse
 from pathlib import Path
+
+# プロジェクトのルートディレクトリをPYTHONPATHに追加
+root_dir = Path(__file__).parent.parent
+sys.path.append(str(root_dir))
+
 from src.utils.environment import EnvironmentUtils as env
 from src.utils.logging_config import get_logger
-from src.modules.consult.consult_flags import find_ids_with_matching_flags
-from src.modules.consult.transfer_list import update_consult_transfer_list
-from src.modules.anq_data.analyzer import analyze_anq_data
-from src.modules.porters.importer import import_to_porters
-from src.modules.common.spreadsheet import get_spreadsheet_connection
+from src.modules.porters.login import PortersLogin
+from src.modules.porters.operations import PortersOperations
 
 logger = get_logger(__name__)
 
-def setup_configurations():
-    """設定ファイルと機密情報をロードしてデータを取得します。"""
+def setup_environment():
+    """
+    実行環境のセットアップを行う
+    - 必要なディレクトリの作成
+    - 設定ファイルの読み込み
+    """
+    # 必要なディレクトリの作成
+    os.makedirs("logs", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
+    
+    # 設定ファイルの読み込み
     try:
-        # 環境変数のロード
+        # 環境変数の読み込み
         env.load_env()
-        
-        # SERVICE_ACCOUNT_FILE のパスを確認する（変換は不要）
-        service_account_file = os.getenv('SERVICE_ACCOUNT_FILE')
-        if service_account_file:
-            logger.info(f"SERVICE_ACCOUNT_FILE: {service_account_file}")
-        
-        # スプレッドシートへの接続をテスト
-        spreadsheet = get_spreadsheet_connection()
-        if not spreadsheet:
-            logger.error("スプレッドシートへの接続に失敗したため、処理を中止します")
-            return False
-        logger.info("スプレッドシートへの接続テストに成功しました")
-        
+        logger.info("環境変数を読み込みました")
         return True
     except Exception as e:
-        logger.error(f"設定のロードに失敗: {str(e)}")
+        logger.error(f"設定ファイルの読み込みに失敗しました: {str(e)}")
         return False
-
-def process_consult_flags():
-    """
-    処理ブロック1: 相談フラグの確認と新規IDの抽出
-    - 相談フラグマスタからフラグが1に設定されている項目を抽出
-    - 友達リストDLデータシートの"対応マーク"列を確認し、抽出したフラグ項目に一致するIDを特定
-    - 既存の相談転記先リストに存在しないIDを新規IDとして抽出
-    - 抽出した新規IDと相談日（現在の日付）を相談転記先リスト（相談Raw）に追加
-    
-    Returns:
-        list: 一致するIDのリスト。エラーまたは該当なしの場合はNone
-    """
-    logger.info("=" * 80)
-    logger.info("処理ブロック1: 相談フラグの確認と新規IDの抽出を開始します")
-    logger.info("=" * 80)
-    
-    # フラグに一致するIDを検索
-    matching_ids = find_ids_with_matching_flags()
-    
-    if matching_ids:
-        logger.info(f"✅ フラグ条件に一致するIDを{len(matching_ids)}件見つけました:")
-        
-        # IDを書式なしテキストとして表示（コピー用）
-        logger.info("以下のIDをコピーして使用できます（書式なしテキスト）:")
-        id_text = "\n".join(matching_ids)
-        logger.info(f"\n{id_text}")
-        
-        # 個別のIDもログに記録
-        for id_value in matching_ids:
-            logger.info(f"  - {id_value}")
-            
-        # 相談転記先リストを更新
-        logger.info("相談転記先リストの更新を開始します...")
-        if update_consult_transfer_list(matching_ids):
-            logger.info("✅ 相談転記先リストの更新が完了しました")
-            logger.info("=" * 80)
-            logger.info("処理ブロック1: 相談フラグの確認と新規IDの抽出が完了しました")
-            logger.info("=" * 80)
-            return matching_ids
-        else:
-            logger.error("❌ 相談転記先リストの更新に失敗しました")
-            logger.info("=" * 80)
-            logger.info("処理ブロック1: 相談フラグの確認と新規IDの抽出が失敗しました")
-            logger.info("=" * 80)
-            return None
-    else:
-        logger.warning("❌ 一致するIDが見つからないか、処理中にエラーが発生しました")
-        logger.info("=" * 80)
-        logger.info("処理ブロック1: 相談フラグの確認と新規IDの抽出が完了しました（該当IDなし）")
-        logger.info("=" * 80)
-        return None
-
-def process_anq_data(matching_ids=None):
-    """
-    処理ブロック2: アンケートデータの取得とCSV出力
-    - 新しく追加されたIDのユーザーのアンケートDLデータからレコードを取得
-    - 取得したレコードをCSVファイルとして保存（cp932エンコーディング）
-    
-    Args:
-        matching_ids (list, optional): 処理対象のIDリスト。指定がない場合は処理ブロック1の結果を使用
-        
-    Returns:
-        tuple: (success, csv_path) 処理が成功した場合はTrue、失敗した場合はFalse、およびCSVファイルのパス
-    """
-    # IDが指定されていない場合は処理ブロック1を実行
-    if matching_ids is None:
-        logger.info("IDが指定されていないため、処理ブロック1を実行します")
-        matching_ids = process_consult_flags()
-    
-    if not matching_ids:
-        logger.warning("一致するIDがないため、アンケートデータの取得をスキップします")
-        return False, None
-    
-    logger.info("=" * 80)
-    logger.info("処理ブロック2: アンケートデータの取得とCSV出力を開始します")
-    logger.info("=" * 80)
-    
-    # アンケートデータを取得してCSV出力
-    logger.info(f"{len(matching_ids)}件のIDに対するアンケートデータを取得します")
-    
-    success, csv_path = analyze_anq_data(matching_ids)
-    if success:
-        logger.info(f"✅ アンケートデータの取得とCSV出力が完了しました: {csv_path}")
-        logger.info("=" * 80)
-        logger.info("処理ブロック2: アンケートデータの取得とCSV出力が完了しました")
-        logger.info("=" * 80)
-        return True, csv_path
-    else:
-        logger.error("❌ アンケートデータの取得とCSV出力に失敗しました")
-        logger.info("=" * 80)
-        logger.info("処理ブロック2: アンケートデータの取得とCSV出力が失敗しました")
-        logger.info("=" * 80)
-        return False, None
-
-def process_porters_import(run_anq_data=False, matching_ids=None):
-    """
-    PORTERSへのデータインポート処理を実行する
-    
-    Args:
-        run_anq_data (bool): アンケートデータ分析を実行するかどうか
-        matching_ids (list): マッチングするID一覧
-    
-    Returns:
-        bool: 処理成功の場合はTrue、失敗の場合はFalse
-    """
-    try:
-        logger.info("=== PORTERSへのデータインポート処理を開始します ===")
-        
-        # IDが指定されていない場合は、最新のCSVファイルを使用
-        if not matching_ids:
-            csv_path = os.path.join(env.get_project_root(), "output", "anq_data_latest.csv")
-            
-            # CSVファイルの存在確認
-            if not os.path.exists(csv_path):
-                logger.error(f"CSVファイルが見つかりません: {csv_path}")
-                return False
-            
-            logger.info(f"IDが指定されていないため、最新のCSVファイルを使用します: {csv_path}")
-        else:
-            # IDが指定されている場合は、従来通りの処理
-            logger.info(f"指定されたID: {matching_ids}")
-            
-            # アンケートデータ分析を実行する場合
-            if run_anq_data:
-                if not process_anq_data(matching_ids):
-                    logger.error("アンケートデータ分析に失敗したため、インポート処理を中止します")
-                    return False
-            
-            # CSVファイルのパスを取得
-            csv_path = os.path.join(env.get_project_root(), "output", "anq_data.csv")
-        
-        # インポート処理を実行
-        result = import_to_porters(csv_path)
-        
-        if result:
-            logger.info("✅ PORTERSへのデータインポート処理が完了しました")
-        else:
-            logger.error("❌ PORTERSへのデータインポート処理に失敗しました")
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"PORTERSへのデータインポート処理中にエラーが発生しました: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return False
-
-def run_all():
-    """
-    すべての処理ブロックを順番に実行する
-    
-    Returns:
-        tuple: (matching_ids, anq_success, porters_success) 各処理ブロックの結果
-    """
-    logger.info("相談フラグ管理システムの処理を開始します")
-    
-    # 処理ブロック1: 相談フラグの確認と新規IDの抽出
-    matching_ids = process_consult_flags()
-    
-    # 処理ブロック2: アンケートデータの取得とCSV出力
-    if matching_ids:
-        anq_success, csv_path = process_anq_data(matching_ids)
-    else:
-        logger.warning("一致するIDがないため、後続の処理をスキップします")
-        anq_success = False
-        csv_path = None
-    
-    # 処理ブロック3: PORTERSへのデータインポート
-    if anq_success and csv_path:
-        porters_success = process_porters_import(False, matching_ids)
-    else:
-        logger.warning("アンケートデータの取得に失敗したため、PORTERSへのインポートをスキップします")
-        porters_success = False
-    
-    # 処理結果のサマリーを表示
-    logger.info("=" * 80)
-    logger.info("相談フラグ管理システムの処理結果サマリー")
-    logger.info("=" * 80)
-    logger.info(f"処理ブロック1: 相談フラグの確認と新規IDの抽出 - {'成功' if matching_ids else '失敗または該当なし'}")
-    logger.info(f"処理ブロック2: アンケートデータの取得とCSV出力 - {'成功' if anq_success else '失敗またはスキップ'}")
-    logger.info(f"処理ブロック3: PORTERSへのデータインポート - {'成功' if porters_success else '失敗またはスキップ'}")
-    logger.info("=" * 80)
-    
-    if matching_ids and anq_success and porters_success:
-        logger.info("✅ すべての処理が正常に完了しました")
-    else:
-        logger.warning("⚠️ 一部の処理が失敗またはスキップされました")
-    
-    logger.info("相談フラグ管理システムの処理を終了します")
-    
-    return matching_ids, anq_success, porters_success
 
 def parse_arguments():
     """
@@ -233,130 +54,95 @@ def parse_arguments():
     Returns:
         argparse.Namespace: 解析された引数
     """
-    parser = argparse.ArgumentParser(description='相談フラグ管理システム')
-    parser.add_argument('--block', type=int, choices=[1, 2, 3], help='実行する処理ブロック (1: 相談フラグ確認, 2: アンケートデータ取得, 3: PORTERSインポート)')
-    parser.add_argument('--ids', nargs='+', help='処理対象のIDリスト（カンマ区切りまたは複数指定）')
-    parser.add_argument('--all', action='store_true', help='すべての処理ブロックを実行')
+    parser = argparse.ArgumentParser(description='PORTERSシステムへのログイン処理')
+    parser.add_argument('--headless', action='store_true', help='ヘッドレスモードで実行')
     parser.add_argument('--env', default='development', help='実行環境 (development または production)')
+    parser.add_argument('--skip-operations', action='store_true', help='業務操作をスキップする')
+    parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], 
+                        help='ログレベル (DEBUG, INFO, WARNING, ERROR, CRITICAL)')
     
     return parser.parse_args()
 
 def main():
-    """メイン処理"""
+    """
+    メイン処理
+    
+    Returns:
+        int: 処理が成功した場合は0、失敗した場合は1
+    """
     try:
         logger.info("================================================================================")
-        logger.info("相談フラグ管理システムを開始します")
+        logger.info("PORTERSシステムログインツールを開始します")
         logger.info("================================================================================")
         
-        # 処理ブロック1: 相談フラグの確認と新規IDの抽出
-        logger.info("================================================================================")
-        logger.info("処理ブロック1: 相談フラグの確認と新規IDの抽出")
-        logger.info("================================================================================")
-        
-        # 相談フラグの確認と新規IDの抽出
-        matching_ids = process_consult_flags()
-        
-        # 新規IDが見つからなくても正常終了として扱う
-        if matching_ids is None:
-            logger.info("✅ 新規IDは見つかりませんでした。処理は正常に完了しました。")
-            logger.info("================================================================================")
-            logger.info("相談フラグ管理システムの処理結果サマリー")
-            logger.info("================================================================================")
-            logger.info("処理ブロック1: 相談フラグの確認と新規IDの抽出 - 成功")
-            logger.info("処理ブロック2: アンケートデータの取得とCSV出力 - スキップ (新規IDなし)")
-            logger.info("処理ブロック3: PORTERSへのデータインポート - スキップ (新規IDなし)")
-            logger.info("================================================================================")
-            logger.info("✅ すべての処理が正常に完了しました (新規IDなし)")
-            logger.info("相談フラグ管理システムの処理を終了します")
-            return True
-        
-        # 処理ブロック2: アンケートデータの取得とCSV出力
-        if matching_ids:
-            logger.info("================================================================================")
-            logger.info("処理ブロック2: アンケートデータの取得とCSV出力")
-            logger.info("================================================================================")
-            
-            anq_success, csv_path = process_anq_data(matching_ids)
-        else:
-            logger.warning("一致するIDがないため、後続の処理をスキップします")
-            anq_success = False
-            csv_path = None
-        
-        # 処理ブロック3: PORTERSへのデータインポート
-        if anq_success and csv_path:
-            logger.info("================================================================================")
-            logger.info("処理ブロック3: PORTERSへのデータインポート")
-            logger.info("================================================================================")
-            
-            porters_success = process_porters_import(False, matching_ids)
-        else:
-            logger.warning("アンケートデータの取得に失敗したため、PORTERSへのインポートをスキップします")
-            porters_success = False
-        
-        # 処理結果のサマリーを表示
-        logger.info("================================================================================")
-        logger.info("相談フラグ管理システムの処理結果サマリー")
-        logger.info("================================================================================")
-        logger.info(f"処理ブロック1: 相談フラグの確認と新規IDの抽出 - {'成功' if matching_ids else '失敗または該当なし'}")
-        logger.info(f"処理ブロック2: アンケートデータの取得とCSV出力 - {'成功' if anq_success else '失敗またはスキップ'}")
-        logger.info(f"処理ブロック3: PORTERSへのデータインポート - {'成功' if porters_success else '失敗またはスキップ'}")
-        logger.info("================================================================================")
-        
-        if matching_ids and anq_success and porters_success:
-            logger.info("✅ すべての処理が正常に完了しました")
-            return True
-        else:
-            logger.warning("⚠️ 一部の処理が失敗またはスキップされました")
-            return False
-            
-    except Exception as e:
-        logger.error(f"相談フラグ管理システムの実行中にエラーが発生しました: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return False
-    finally:
-        logger.info("相談フラグ管理システムの処理を終了します")
-
-if __name__ == "__main__":
-    try:
         # コマンドライン引数の解析
         args = parse_arguments()
         
-        # 設定ファイルと機密情報をロード
-        if not setup_configurations():
-            logger.error("設定のロードに失敗したため、処理を中止します")
-            sys.exit(1)
+        # 環境変数の設定
+        os.environ['APP_ENV'] = args.env
+        os.environ['LOG_LEVEL'] = args.log_level
+        logger.info(f"実行環境: {args.env}")
+        logger.info(f"ログレベル: {args.log_level}")
         
-        # IDリストの処理
-        ids_list = None
-        if args.ids:
-            # カンマ区切りの場合は分割
-            if len(args.ids) == 1 and ',' in args.ids[0]:
-                ids_list = args.ids[0].split(',')
-            else:
-                ids_list = args.ids
+        # 環境設定
+        if not setup_environment():
+            logger.error("環境設定に失敗したため、処理を中止します")
+            return 1
+        
+        # 設定ファイルのパス
+        selectors_path = os.path.join(root_dir, "config", "selectors.csv")
+        
+        # PORTERSへのログイン
+        success, browser, login = PortersLogin.login_to_porters(
+            selectors_path=selectors_path, 
+            headless=args.headless
+        )
+        
+        if success:
+            logger.info("ログイン処理が完了しました")
             
-            logger.info(f"コマンドラインから{len(ids_list)}件のIDを受け取りました")
-        
-        # 処理ブロックの実行
-        if args.all or (not args.block and not args.ids):
-            # すべての処理ブロックを実行
-            main()
-        elif args.block == 1:
-            # 処理ブロック1: 相談フラグの確認と新規IDの抽出
-            process_consult_flags()
-        elif args.block == 2:
-            # 処理ブロック2: アンケートデータの取得とCSV出力
-            process_anq_data(ids_list)
-        elif args.block == 3:
-            # 処理ブロック3: PORTERSへのデータインポート
-            process_porters_import()
+            # 業務操作の実行（スキップオプションが指定されていない場合）
+            if not args.skip_operations and browser:
+                logger.info("業務操作を開始します")
+                operations = PortersOperations(browser)
+                
+                # 「その他業務」ボタンをクリックしてメニュー項目5を押す
+                if not operations.execute_operations_flow():
+                    logger.error("業務操作に失敗しました")
+                else:
+                    logger.info("業務操作が正常に完了しました")
+                
+                # 操作完了後の待機時間
+                logger.info("操作完了後、5秒間待機します")
+                time.sleep(5)
+            
+            # ログアウト処理
+            if login:
+                login.logout()
+            
+            # ブラウザを終了
+            if browser:
+                browser.quit()
+                
+            logger.info("================================================================================")
+            logger.info("PORTERSシステムログインツールを正常に終了します")
+            logger.info("================================================================================")
+            return 0
         else:
-            logger.error("実行する処理ブロックが指定されていません")
-            sys.exit(1)
-            
+            logger.error("ログイン処理に失敗しました")
+            logger.info("================================================================================")
+            logger.info("PORTERSシステムログインツールを異常終了します")
+            logger.info("================================================================================")
+            return 1
+        
     except Exception as e:
-        logger.error(f"予期せぬエラーが発生しました: {str(e)}")
+        logger.error(f"予期しないエラーが発生しました: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
-        sys.exit(1)
+        logger.info("================================================================================")
+        logger.info("PORTERSシステムログインツールを異常終了します")
+        logger.info("================================================================================")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

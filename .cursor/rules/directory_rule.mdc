@@ -1,0 +1,35 @@
+---
+description: 各ディレクトリの説明
+globs: *
+alwaysApply: true
+---
+# modulesディレクトリ
+pattern: "src/modules/**/*.py"
+description: "モジュールは、ビジネスロジックを含む独立性の高い機能単位のコードを配置します。各モジュールは再利用可能で疎結合を目指してください。"
+include: "@file:general.cursor"
+
+# utilsディレクトリ
+pattern: "src/utils/**/*.py"
+description: "ユーティリティは、汎用的で再利用性の高い共通関数やクラスを配置します。特定のビジネスロジックに依存しないよう設計してください。"
+include: "@file:general.cursor"
+
+# testsディレクトリ
+pattern: "tests/**/*.py"
+description: "単体テストや統合テストのコードを配置します。テストケースは対象となるモジュールやユーティリティと同じ階層構造を保ち、明確かつ網羅的に記述してください。"
+include: "@file:general.cursor"
+
+# docsディレクトリ
+pattern: "docs/**/*"
+description: "プロジェクトの仕様書やドキュメントを配置します。ドキュメントは常に最新状態を維持してください。"
+include: "@file:general.cursor"
+
+# dataディレクトリ
+pattern: "data/**/*"
+description: "処理結果やアウトプットデータを配置します。入力元データと混在させないよう注意してください。"
+include: "@file:general.cursor"
+
+# logsディレクトリ
+pattern: "logs/**/*"
+utils/logging_config.py を共通で使ってロギング
+description: "日次ログファイルを配置します。ログファイルは日付ベースで管理し、整理された状態を保ってください。"
+include: "@file:general.cursor"

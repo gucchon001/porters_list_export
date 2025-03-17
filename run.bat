@@ -1,11 +1,14 @@
 @echo off
+rem ※ バッチファイルのディレクトリに移動することで、相対パスの解決を統一します。
+cd /d %~dp0
+
 chcp 65001 >nul
+
+REM プロジェクトルート（現在のディレクトリ）を PYTHONPATH に設定
+set "PYTHONPATH=%CD%"
 
 REM 仮想環境のパスを設定（必要に応じて変更してください）
 set "VENV_PATH=.\venv"
-
-REM 実行するPythonモジュールの名前を設定（必要に応じて変更してください）
-set "MODULE_NAME=src.main"
 
 REM 仮想環境が存在するか確認
 if exist "%VENV_PATH%\Scripts\activate.bat" (
@@ -18,11 +21,20 @@ if exist "%VENV_PATH%\Scripts\activate.bat" (
     exit /b 1
 )
 
-REM モジュールを実行
-echo [INFO] モジュールを実行しています: %MODULE_NAME%
-python -m %MODULE_NAME%
-if errorlevel 1 (
-    echo [ERROR] モジュールの実行中にエラーが発生しました。
+REM 実行するPythonスクリプトのモジュールを設定（モジュール形式で実行するようにする）
+set "SCRIPT_MODULE=src.main"
+
+REM スクリプトが存在するか確認（ファイルチェックは src\main.py を使用）
+if exist "src\main.py" (
+    echo [INFO] スクリプトを実行しています: %SCRIPT_MODULE%
+    python -m %SCRIPT_MODULE%
+    if errorlevel 1 (
+        echo [ERROR] スクリプトの実行中にエラーが発生しました。
+        pause
+        exit /b 1
+    )
+) else (
+    echo [ERROR] スクリプトが見つかりません: src\main.py
     pause
     exit /b 1
 )

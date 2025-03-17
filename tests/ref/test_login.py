@@ -3,87 +3,27 @@ import os
 from pathlib import Path
 import sys
 from selenium.webdriver.support.ui import WebDriverWait
+
+# プロジェクトのルートディレクトリをPYTHONPATHに追加
+root_dir = Path(__file__).parent.parent
+sys.path.append(str(root_dir))
+
+from src.utils.environment import EnvironmentUtils as env
+from src.utils.logging_config import get_logger
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 
-from src.utils.environment import EnvironmentUtils as env
-from src.utils.logging_config import get_logger
-
 logger = get_logger(__name__)
 
-class PortersLogin:
-    """
-    PORTERSシステムへのログイン処理を管理するクラス
-    
-    このクラスは、PORTERSシステムへのログイン、二重ログイン回避、ログアウトなどの
-    認証関連の処理を担当します。ブラウザ操作の基本機能はPortersBrowserクラスに依存します。
-    """
-    
+class TestLogin:
     def __init__(self, browser):
-        """
-        ログイン処理クラスの初期化
-        
-        Args:
-            browser (PortersBrowser): ブラウザ操作を管理するインスタンス
-        """
+        """ログイン処理を管理するクラス"""
         self.browser = browser
         self.screenshot_dir = browser.screenshot_dir
     
-    @classmethod
-    def login_to_porters(cls, selectors_path=None, headless=False):
-        """
-        PORTERSシステムへのログイン処理を実行する
-        
-        Args:
-            selectors_path (str): セレクタ情報を含むCSVファイルのパス
-            headless (bool): ヘッドレスモードで実行するかどうか
-        
-        Returns:
-            tuple: (success, browser, login) 処理成功の場合はTrue、失敗の場合はFalse、およびブラウザとログインオブジェクト
-        """
-        from src.modules.porters.browser import PortersBrowser
-        
-        try:
-            logger.info("=== PORTERSシステムへのログイン処理を開始します ===")
-            
-            # ブラウザセットアップ
-            browser = PortersBrowser(selectors_path=selectors_path, headless=headless)
-            
-            # WebDriverのセットアップ
-            if not browser.setup():
-                logger.error("ブラウザのセットアップに失敗しました")
-                return False, None, None
-            
-            # ログイン処理
-            login = cls(browser)
-            if not login.execute():
-                logger.error("ログイン処理に失敗しました")
-                browser.quit()
-                return False, None, None
-            
-            # ログイン成功後の検証
-            logger.info("ログイン後の画面を検証します")
-            browser.save_screenshot("login_success_verification.png")
-            
-            logger.info("✅ PORTERSシステムへのログイン処理が正常に完了しました")
-            return True, browser, login
-            
-        except Exception as e:
-            logger.error(f"PORTERSシステムへのログイン処理中にエラーが発生しました: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            if 'browser' in locals() and browser:
-                browser.quit()
-            return False, None, None
-    
     def execute(self):
-        """
-        ログイン処理を実行する
-        
-        Returns:
-            bool: ログインが成功した場合はTrue、失敗した場合はFalse
-        """
+        """ログイン処理を実行"""
         try:
             logger.info("=== ログイン処理を開始します ===")
             
@@ -192,12 +132,7 @@ class PortersLogin:
             return False
     
     def _handle_double_login_popup(self):
-        """
-        二重ログインポップアップの処理
-        
-        Returns:
-            bool: ポップアップ処理が成功した場合はTrue、失敗した場合はFalse
-        """
+        """二重ログインポップアップの処理"""
         # 二重ログインポップアップが表示されているか確認
         double_login_ok_button = "#pageDeny > div.ui-dialog.ui-widget.ui-widget-content.ui-corner-all.ui-front.p-ui-messagebox.ui-dialog-buttons.ui-draggable > div.ui-dialog-buttonpane.ui-widget-content.ui-helper-clearfix > div > button > span"
         
@@ -214,12 +149,10 @@ class PortersLogin:
             ok_button.click()
             logger.info("✓ 二重ログインポップアップのOKボタンをクリックしました")
             time.sleep(2)
-            return True
             
         except TimeoutException:
             # ポップアップが表示されていない場合は何もしない
             logger.info("二重ログインポップアップは表示されていません。処理を継続します。")
-            return True
         except Exception as e:
             # その他のエラー
             logger.warning(f"二重ログインポップアップ処理中にエラーが発生しましたが、処理を継続します: {e}")
@@ -229,18 +162,11 @@ class PortersLogin:
                 self.browser.driver.execute_script(f"document.querySelector('{double_login_ok_button}').click();")
                 logger.info("✓ JavaScriptで二重ログインポップアップのOKボタンをクリックしました")
                 time.sleep(2)
-                return True
             except:
                 logger.warning("JavaScriptでのクリックも失敗しましたが、処理を継続します")
-                return False
     
     def logout(self):
-        """
-        明示的なログアウト処理を実行する
-        
-        Returns:
-            bool: ログアウトが成功した場合はTrue、失敗した場合はFalse
-        """
+        """明示的なログアウト処理を実行する"""
         try:
             logger.info("=== ログアウト処理を開始します ===")
             
@@ -322,21 +248,16 @@ class PortersLogin:
                 # セレクタが見つからない場合、JavaScriptでログアウトを試みる
                 logger.warning("ログアウトボタンが見つかりませんでした。JavaScriptでのログアウトを試みます。")
                 try:
-                    # 一般的なログアウトURLにリダイレクト
-                    admin_url = env.get_env_var('ADMIN_URL')
-                    base_url = admin_url.split('/index/login')[0]
-                    logout_url = f"{base_url}/index/logout"
-                    
-                    self.browser.driver.get(logout_url)
-                    logger.info(f"✓ ログアウトURLに直接アクセスしました: {logout_url}")
+                    # POSTERSの一般的なログアウトURLパターンを試す
+                    self.browser.driver.execute_script("window.location.href = '/logout' || '/auth/logout' || '/porters/logout';")
                     time.sleep(3)
-                    self.browser.save_screenshot("after_direct_logout.png")
-                    logger.info("✅ 直接URLアクセスでのログアウトに成功しました")
+                    logger.info("✓ JavaScriptでログアウトURLにリダイレクトしました")
+                    self.browser.save_screenshot("after_redirect_logout.png")
                     return True
-                except Exception as url_e:
-                    logger.error(f"直接URLアクセスでのログアウトにも失敗しました: {str(url_e)}")
+                except Exception as js_e:
+                    logger.error(f"JavaScriptを使用したログアウトリダイレクトにも失敗しました: {str(js_e)}")
             
-            logger.error("❌ ログアウト処理に失敗しました")
+            logger.warning("ログアウト処理ができませんでした。ブラウザを閉じて強制終了します。")
             return False
             
         except Exception as e:
