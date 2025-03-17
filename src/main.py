@@ -61,13 +61,20 @@ def parse_arguments():
     parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], 
                         help='ログレベル (DEBUG, INFO, WARNING, ERROR, CRITICAL)')
     parser.add_argument('--process', choices=['candidates', 'entryprocess'], default='candidates',
-                        help='実行する処理フロー (candidates: 応募者一覧, entryprocess: 選考プロセス)')
+                        help='実行する処理フロー (candidates: 求職者一覧のエクスポート, entryprocess: 選考プロセス一覧の表示)')
     
     return parser.parse_args()
 
 def main():
     """
     メイン処理
+    
+    以下の処理を実行します：
+    1. 環境設定
+    2. PORTERSシステムへのログイン
+    3. 選択された処理フローの実行（求職者一覧のエクスポートまたは選考プロセス一覧の表示）
+    4. ログアウト処理
+    5. ブラウザの終了
     
     Returns:
         int: 処理が成功した場合は0、失敗した場合は1
@@ -95,59 +102,87 @@ def main():
         # 設定ファイルのパス
         selectors_path = os.path.join(root_dir, "config", "selectors.csv")
         
-        # PORTERSへのログイン
-        success, browser, login = PortersLogin.login_to_porters(
-            selectors_path=selectors_path, 
-            headless=args.headless
-        )
+        # ブラウザとログインオブジェクトの初期化
+        browser = None
+        login = None
         
-        if success:
-            logger.info("ログイン処理が完了しました")
+        try:
+            # PORTERSへのログイン
+            success, browser, login = PortersLogin.login_to_porters(
+                selectors_path=selectors_path, 
+                headless=args.headless
+            )
             
-            # 業務操作の実行（スキップオプションが指定されていない場合）
-            if not args.skip_operations and browser:
-                logger.info("業務操作を開始します")
-                operations = PortersOperations(browser)
+            if success:
+                logger.info("ログイン処理が完了しました")
                 
-                # 処理フローの選択
-                if args.process == 'candidates':
-                    # 応募者一覧の処理フロー
-                    logger.info("応募者一覧の処理フローを実行します")
-                    if not operations.execute_operations_flow():
-                        logger.error("応募者一覧の処理フローに失敗しました")
-                    else:
-                        logger.info("応募者一覧の処理フローが正常に完了しました")
-                elif args.process == 'entryprocess':
-                    # 選考プロセスの処理フロー
-                    logger.info("選考プロセスの処理フローを実行します")
-                    if not operations.access_selection_processes():
-                        logger.error("選考プロセスの処理フローに失敗しました")
-                    else:
-                        logger.info("選考プロセスの処理フローが正常に完了しました")
+                # 業務操作の実行（スキップオプションが指定されていない場合）
+                if not args.skip_operations and browser:
+                    logger.info("業務操作を開始します")
+                    operations = PortersOperations(browser)
+                    
+                    # 処理フローの選択
+                    if args.process == 'candidates':
+                        # 求職者一覧の処理フロー
+                        logger.info("求職者一覧のエクスポート処理フローを実行します")
+                        if not operations.execute_operations_flow():
+                            logger.error("求職者一覧のエクスポート処理フローに失敗しました")
+                        else:
+                            logger.info("求職者一覧のエクスポート処理フローが正常に完了しました")
+                    elif args.process == 'entryprocess':
+                        # 選考プロセスの処理フロー
+                        logger.info("選考プロセス一覧の表示処理フローを実行します")
+                        if not operations.access_selection_processes():
+                            logger.error("選考プロセス一覧の表示処理フローに失敗しました")
+                        else:
+                            logger.info("選考プロセス一覧の表示処理フローが正常に完了しました")
+                    
+                    # 操作完了後の待機時間
+                    logger.info("操作完了後、5秒間待機します")
+                    time.sleep(5)
                 
-                # 操作完了後の待機時間
-                logger.info("操作完了後、5秒間待機します")
-                time.sleep(5)
-            
-            # ログアウト処理
-            if login:
-                login.logout()
-            
-            # ブラウザを終了
-            if browser:
-                browser.quit()
+                # ログアウト処理
+                if login:
+                    logger.info("ログアウト処理を開始します")
+                    try:
+                        logout_result = login.logout()
+                        if logout_result:
+                            logger.info("ログアウト処理が正常に完了しました")
+                        else:
+                            logger.warning("ログアウト処理に失敗しました")
+                    except Exception as e:
+                        logger.error(f"ログアウト処理中に例外が発生しました: {str(e)}")
                 
-            logger.info("================================================================================")
-            logger.info("PORTERSシステムログインツールを正常に終了します")
-            logger.info("================================================================================")
-            return 0
-        else:
-            logger.error("ログイン処理に失敗しました")
+                logger.info("================================================================================")
+                logger.info("PORTERSシステムログインツールを正常に終了します")
+                logger.info("================================================================================")
+                return 0
+            else:
+                logger.error("ログイン処理に失敗しました")
+                logger.info("================================================================================")
+                logger.info("PORTERSシステムログインツールを異常終了します")
+                logger.info("================================================================================")
+                return 1
+                
+        except Exception as e:
+            logger.error(f"処理中に例外が発生しました: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             logger.info("================================================================================")
             logger.info("PORTERSシステムログインツールを異常終了します")
             logger.info("================================================================================")
             return 1
-        
+            
+        finally:
+            # 必ずブラウザを終了する
+            if browser:
+                logger.info("ブラウザを終了します")
+                try:
+                    browser.quit()
+                    logger.info("ブラウザを正常に終了しました")
+                except Exception as e:
+                    logger.error(f"ブラウザの終了中に例外が発生しました: {str(e)}")
+            
     except Exception as e:
         logger.error(f"予期しないエラーが発生しました: {str(e)}")
         import traceback

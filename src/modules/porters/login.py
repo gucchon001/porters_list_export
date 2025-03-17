@@ -251,90 +251,180 @@ class PortersLogin:
             # スクリーンショット
             self.browser.save_screenshot("before_logout.png")
             
-            # ログアウトボタンを探す
-            # まず、セレクタ情報を確認
-            logout_selector = None
-            if 'porters_menu' in self.browser.selectors and 'logout_button' in self.browser.selectors['porters_menu']:
-                logout_selector = self.browser.selectors['porters_menu']['logout_button']['selector_value']
+            # ユーザーメニューを開く処理
+            user_menu_opened = False
             
-            if not logout_selector:
-                # セレクタがない場合、一般的なログアウトボタンのセレクタを試す
-                logger.info("ログアウトボタンのセレクタが設定されていません。一般的なセレクタを試します。")
-                possible_selectors = [
-                    'a[href*="logout"]', 
-                    'button[id*="logout"]', 
-                    'a[id*="logout"]',
-                    '.logout', 
-                    '#logout',
-                    'a:contains("ログアウト")',
-                    'button:contains("ログアウト")'
-                ]
-                
-                # 各セレクタを試す
-                for selector in possible_selectors:
-                    try:
-                        logout_elements = self.browser.driver.find_elements(By.CSS_SELECTOR, selector)
-                        if logout_elements:
-                            logger.info(f"ログアウトボタンを発見しました: {selector}")
-                            logout_selector = selector
-                            break
-                    except:
-                        continue
+            # 1. まず指定されたセレクタでユーザーメニューを探す
+            try:
+                logger.info("セレクタでユーザーメニューボタンを探索します")
+                user_menu_selector = "#nav2-inner > div > ul > li.original-class-user > a > span"
+                user_menu_element = WebDriverWait(self.browser.driver, 10).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, user_menu_selector))
+                )
+                user_menu_element.click()
+                logger.info("✓ セレクタでユーザーメニューボタンをクリックしました")
+                user_menu_opened = True
+            except Exception as e:
+                logger.warning(f"セレクタでのユーザーメニュークリックに失敗しました: {str(e)}")
             
-            if logout_selector:
-                # ログアウトボタンをクリック
+            # 2. 「川島」テキストを含む要素を探す
+            if not user_menu_opened:
                 try:
-                    logger.info(f"ログアウトボタンを探索: {logout_selector}")
-                    logout_button = self.browser.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, logout_selector)))
-                    logout_button.click()
-                    logger.info("✓ ログアウトボタンをクリックしました")
+                    logger.info("「川島」テキストを含む要素を探索します")
+                    # XPathを使用して「川島」テキストを含む要素を検索
+                    kawashima_xpath = "//*[contains(text(), '川島')]"
+                    kawashima_elements = self.browser.driver.find_elements(By.XPATH, kawashima_xpath)
                     
-                    # 確認ダイアログが表示される場合の処理
+                    if kawashima_elements:
+                        logger.info(f"「川島」テキストを含む要素を {len(kawashima_elements)} 個発見しました")
+                        for element in kawashima_elements:
+                            try:
+                                logger.info(f"「川島」テキスト要素をクリックします: {element.text}")
+                                element.click()
+                                logger.info("✓ 「川島」テキスト要素をクリックしました")
+                                user_menu_opened = True
+                                break
+                            except Exception as click_e:
+                                logger.warning(f"「川島」テキスト要素のクリックに失敗しました: {str(click_e)}")
+                                # 親要素をクリックしてみる
+                                try:
+                                    parent = self.browser.driver.execute_script("return arguments[0].parentNode;", element)
+                                    parent.click()
+                                    logger.info("✓ 「川島」テキスト要素の親要素をクリックしました")
+                                    user_menu_opened = True
+                                    break
+                                except Exception as parent_e:
+                                    logger.warning(f"親要素のクリックにも失敗しました: {str(parent_e)}")
+                except Exception as e:
+                    logger.warning(f"「川島」テキスト要素の探索に失敗しました: {str(e)}")
+            
+            # 3. 一般的なユーザーメニューを探す
+            if not user_menu_opened:
+                try:
+                    logger.info("一般的なユーザーメニューを探索します")
+                    user_texts = ["ユーザー", "User", "user"]
+                    for text in user_texts:
+                        try:
+                            user_xpath = f"//*[contains(text(), '{text}')]"
+                            user_elements = self.browser.driver.find_elements(By.XPATH, user_xpath)
+                            if user_elements:
+                                logger.info(f"「{text}」テキストを含む要素を発見しました")
+                                user_elements[0].click()
+                                logger.info(f"✓ 「{text}」テキスト要素をクリックしました")
+                                user_menu_opened = True
+                                break
+                        except Exception as text_e:
+                            logger.warning(f"「{text}」テキスト要素のクリックに失敗しました: {str(text_e)}")
+                except Exception as e:
+                    logger.warning(f"一般的なユーザーメニューの探索に失敗しました: {str(e)}")
+            
+            # ユーザーメニューが開けなかった場合は直接ログアウトリンクを探す
+            if not user_menu_opened:
+                logger.warning("ユーザーメニューを開けませんでした。直接ログアウトリンクを探します。")
+                try:
+                    logger.info("直接ログアウトリンクを探索します")
+                    logout_link_selector = "a[href*='logout']"
+                    logout_link = WebDriverWait(self.browser.driver, 5).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, logout_link_selector))
+                    )
+                    logout_link.click()
+                    logger.info("✓ 直接ログアウトリンクをクリックしました")
+                    time.sleep(3)
+                    self.browser.save_screenshot("after_direct_logout_link.png")
+                    
+                    # ログアウト確認
+                    if self._verify_logout():
+                        return True
+                except Exception as e:
+                    logger.warning(f"直接ログアウトリンクのクリックに失敗しました: {str(e)}")
+            
+            # ユーザーメニューが開けた場合、ログアウトボタンをクリック
+            if user_menu_opened:
+                time.sleep(2)  # メニューが表示されるまで待機
+                self.browser.save_screenshot("after_user_menu_open.png")
+                
+                # ログアウトボタンをクリック
+                logout_clicked = False
+                
+                # まずセレクタでログアウトボタンを探す
+                try:
+                    logger.info("セレクタでログアウトボタンを探索します")
+                    logout_selector = "#porters-contextmenu-column_1 > ul > li:nth-child(6)"
+                    logout_element = WebDriverWait(self.browser.driver, 10).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, logout_selector))
+                    )
+                    logout_element.click()
+                    logger.info("✓ セレクタでログアウトボタンをクリックしました")
+                    logout_clicked = True
+                except Exception as e:
+                    logger.warning(f"セレクタでのログアウトボタンクリックに失敗しました: {str(e)}")
+                
+                # テキストでログアウトボタンを探す
+                if not logout_clicked:
                     try:
-                        confirm_buttons = self.browser.driver.find_elements(By.CSS_SELECTOR, 'button.confirm, button[id*="confirm"], button:contains("OK"), button:contains("はい")')
-                        if confirm_buttons:
-                            confirm_buttons[0].click()
-                            logger.info("✓ 確認ダイアログのボタンをクリックしました")
-                    except:
-                        logger.info("確認ダイアログはありませんでした")
-                    
+                        logger.info("テキストでログアウトボタンを探索します")
+                        logout_texts = ["ログアウト", "Logout", "logout"]
+                        for text in logout_texts:
+                            try:
+                                logout_xpath = f"//*[contains(text(), '{text}')]"
+                                logout_elements = self.browser.driver.find_elements(By.XPATH, logout_xpath)
+                                if logout_elements:
+                                    logger.info(f"「{text}」テキストを含む要素を発見しました")
+                                    logout_elements[0].click()
+                                    logger.info(f"✓ 「{text}」テキスト要素をクリックしました")
+                                    logout_clicked = True
+                                    break
+                            except Exception as text_e:
+                                logger.warning(f"「{text}」テキスト要素のクリックに失敗しました: {str(text_e)}")
+                    except Exception as e:
+                        logger.warning(f"テキストでのログアウトボタン探索に失敗しました: {str(e)}")
+                
+                # href属性でログアウトリンクを探す
+                if not logout_clicked:
+                    try:
+                        logger.info("href属性でログアウトリンクを探索します")
+                        links = self.browser.driver.find_elements(By.TAG_NAME, "a")
+                        for link in links:
+                            try:
+                                href = link.get_attribute("href")
+                                if href and "logout" in href:
+                                    logger.info(f"ログアウトを含むhrefを発見しました: {href}")
+                                    link.click()
+                                    logger.info("✓ ログアウトリンクをクリックしました")
+                                    logout_clicked = True
+                                    break
+                            except:
+                                continue
+                    except Exception as e:
+                        logger.warning(f"href属性でのログアウトリンク探索に失敗しました: {str(e)}")
+                
+                if logout_clicked:
                     # ログアウト後の待機
                     time.sleep(3)
-                    
-                    # ログアウト後のスクリーンショット
                     self.browser.save_screenshot("after_logout.png")
-                    logger.info("✅ ログアウトに成功しました")
-                    return True
                     
-                except Exception as e:
-                    logger.warning(f"通常のクリックでログアウトに失敗しました: {str(e)}")
-                    # JavaScriptでログアウトを試みる
-                    try:
-                        self.browser.driver.execute_script(f"document.querySelector('{logout_selector}').click();")
-                        logger.info("✓ JavaScriptを使用してログアウトボタンをクリックしました")
-                        time.sleep(3)
-                        self.browser.save_screenshot("after_js_logout.png")
-                        logger.info("✅ JavaScriptでのログアウトに成功しました")
+                    # ログアウト確認
+                    if self._verify_logout():
                         return True
-                    except Exception as js_e:
-                        logger.error(f"JavaScriptを使用したログアウトにも失敗しました: {str(js_e)}")
-            else:
-                # セレクタが見つからない場合、JavaScriptでログアウトを試みる
-                logger.warning("ログアウトボタンが見つかりませんでした。JavaScriptでのログアウトを試みます。")
-                try:
-                    # 一般的なログアウトURLにリダイレクト
-                    admin_url = env.get_env_var('ADMIN_URL')
-                    base_url = admin_url.split('/index/login')[0]
-                    logout_url = f"{base_url}/index/logout"
-                    
-                    self.browser.driver.get(logout_url)
-                    logger.info(f"✓ ログアウトURLに直接アクセスしました: {logout_url}")
-                    time.sleep(3)
-                    self.browser.save_screenshot("after_direct_logout.png")
-                    logger.info("✅ 直接URLアクセスでのログアウトに成功しました")
+            
+            # ここまでの方法でログアウトできなかった場合、直接ログアウトURLにアクセス
+            logger.warning("通常の方法でログアウトできませんでした。直接ログアウトURLにアクセスします。")
+            try:
+                # 一般的なログアウトURLにリダイレクト
+                admin_url = env.get_env_var('ADMIN_URL')
+                base_url = admin_url.split('/index/login')[0]
+                logout_url = f"{base_url}/index/logout"
+                
+                self.browser.driver.get(logout_url)
+                logger.info(f"✓ ログアウトURLに直接アクセスしました: {logout_url}")
+                time.sleep(3)
+                self.browser.save_screenshot("after_direct_logout_url.png")
+                
+                # ログアウト確認
+                if self._verify_logout():
                     return True
-                except Exception as url_e:
-                    logger.error(f"直接URLアクセスでのログアウトにも失敗しました: {str(url_e)}")
+            except Exception as url_e:
+                logger.error(f"直接URLアクセスでのログアウトにも失敗しました: {str(url_e)}")
             
             logger.error("❌ ログアウト処理に失敗しました")
             return False
@@ -343,4 +433,33 @@ class PortersLogin:
             logger.error(f"ログアウト処理中にエラーが発生しました: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
+            return False
+    
+    def _verify_logout(self):
+        """
+        ログアウトが正常に完了したかを確認する
+        
+        Returns:
+            bool: ログアウトが成功した場合はTrue、失敗した場合はFalse
+        """
+        try:
+            # ログイン画面に戻ったことを確認
+            login_elements = self.browser.driver.find_elements(By.CSS_SELECTOR, "input[type='password']")
+            if login_elements:
+                logger.info("ログイン画面に戻ったことを確認しました")
+                logger.info("✅ ログアウト処理が完了しました")
+                return True
+            else:
+                # URLでログアウトを確認
+                current_url = self.browser.driver.current_url
+                logger.info(f"現在のURL: {current_url}")
+                if "login" in current_url or "auth" in current_url:
+                    logger.info("ログインページのURLを確認しました")
+                    logger.info("✅ ログアウト処理が完了しました")
+                    return True
+                else:
+                    logger.warning("ログイン画面への遷移が確認できませんでした")
+                    return False
+        except Exception as e:
+            logger.warning(f"ログイン画面確認中にエラーが発生しました: {str(e)}")
             return False 
