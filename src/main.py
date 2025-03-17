@@ -60,6 +60,8 @@ def parse_arguments():
     parser.add_argument('--skip-operations', action='store_true', help='業務操作をスキップする')
     parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], 
                         help='ログレベル (DEBUG, INFO, WARNING, ERROR, CRITICAL)')
+    parser.add_argument('--process', choices=['candidates', 'entryprocess'], default='candidates',
+                        help='実行する処理フロー (candidates: 応募者一覧, entryprocess: 選考プロセス)')
     
     return parser.parse_args()
 
@@ -83,6 +85,7 @@ def main():
         os.environ['LOG_LEVEL'] = args.log_level
         logger.info(f"実行環境: {args.env}")
         logger.info(f"ログレベル: {args.log_level}")
+        logger.info(f"処理フロー: {args.process}")
         
         # 環境設定
         if not setup_environment():
@@ -106,11 +109,21 @@ def main():
                 logger.info("業務操作を開始します")
                 operations = PortersOperations(browser)
                 
-                # 「その他業務」ボタンをクリックしてメニュー項目5を押す
-                if not operations.execute_operations_flow():
-                    logger.error("業務操作に失敗しました")
-                else:
-                    logger.info("業務操作が正常に完了しました")
+                # 処理フローの選択
+                if args.process == 'candidates':
+                    # 応募者一覧の処理フロー
+                    logger.info("応募者一覧の処理フローを実行します")
+                    if not operations.execute_operations_flow():
+                        logger.error("応募者一覧の処理フローに失敗しました")
+                    else:
+                        logger.info("応募者一覧の処理フローが正常に完了しました")
+                elif args.process == 'entryprocess':
+                    # 選考プロセスの処理フロー
+                    logger.info("選考プロセスの処理フローを実行します")
+                    if not operations.access_selection_processes():
+                        logger.error("選考プロセスの処理フローに失敗しました")
+                    else:
+                        logger.info("選考プロセスの処理フローが正常に完了しました")
                 
                 # 操作完了後の待機時間
                 logger.info("操作完了後、5秒間待機します")
