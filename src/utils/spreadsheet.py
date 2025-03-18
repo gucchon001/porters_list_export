@@ -20,6 +20,7 @@ from google.oauth2.service_account import Credentials
 from gspread.exceptions import APIError, SpreadsheetNotFound
 
 from src.utils.logging_config import get_logger
+from src.utils.environment import EnvironmentUtils as env
 
 logger = get_logger(__name__)
 
@@ -37,46 +38,61 @@ class SpreadsheetManager:
         
         Args:
             credential_path (str, optional): サービスアカウントのJSONファイルパス。
-                                            指定しない場合はデフォルトのパスを使用。
+                                           指定しない場合はデフォルトのパスを使用。
         """
-        self.config = self._load_config()
-        self.spreadsheet_id = self.config.get('SPREADSHEET', 'SSID').strip('"\'')
-        self.sheet_names = {
-            'users_all': self.config.get('SHEET_NAMES', 'USERSALL').strip('"\''),
-            'entryprocess_all': self.config.get('SHEET_NAMES', 'ENTRYPROCESS').strip('"\''),
-            'logging': self.config.get('SHEET_NAMES', 'LOGSHEET').strip('"\''),
-            'count_users': self.config.get('SHEET_NAMES', 'COUNT_USERS').strip('"\'')
-        }
+        # スプレッドシートIDを設定ファイルから取得
+        self.spreadsheet_id = env.get_config_value('SPREADSHEET', 'SSID').strip('"\'')
         
         # 認証情報の設定
         if credential_path is None:
-            # デフォルトのパスを使用
-            base_dir = Path(__file__).resolve().parent.parent.parent
-            credential_path = os.path.join(base_dir, 'config', 'boxwood-dynamo-384411-6dec80faabfc.json')
+            try:
+                # 環境変数から認証情報のパスを取得
+                # 環境変数が読み込まれていることを確認
+                env.load_env()
+                credential_filename = env.get_env_var('SERVICE_ACCOUNT_FILE', default=None)
+                
+                if credential_filename:
+                    # 相対パスを絶対パスに変換
+                    if not os.path.isabs(credential_filename):
+                        base_dir = env.get_project_root()
+                        credential_path = os.path.join(base_dir, credential_filename)
+                    else:
+                        credential_path = credential_filename
+                    
+                    logger.info(f"環境変数から認証情報のパスを取得しました: {credential_path}")
+                else:
+                    # 環境変数が見つからない場合はデフォルト値を使用
+                    base_dir = env.get_project_root()
+                    credential_path = os.path.join(base_dir, 'config', 'service_account.json')
+                    logger.warning(f"環境変数に認証情報のパスが設定されていないため、デフォルト値を使用します: {credential_path}")
+            except Exception as e:
+                # エラー発生時はデフォルト値を使用
+                base_dir = env.get_project_root()
+                credential_path = os.path.join(base_dir, 'config', 'service_account.json')
+                logger.warning(f"認証情報のパス取得中にエラーが発生したため、デフォルト値を使用します: {str(e)}")
+        
+        # 認証情報ファイルの存在確認
+        if not os.path.exists(credential_path):
+            logger.warning(f"指定された認証情報ファイルが存在しません: {credential_path}")
+            # ファイル名の変更を試みる（設定ファイルの名前とファイルの実際の名前が異なる場合）
+            base_dir = env.get_project_root()
+            potential_files = [
+                os.path.join(base_dir, 'config', 'boxwood-dynamo-384411-6dec80faabfc.json'),
+                os.path.join(base_dir, 'config', 'service_account.json')
+            ]
+            
+            for potential_file in potential_files:
+                if os.path.exists(potential_file):
+                    credential_path = potential_file
+                    logger.info(f"代替の認証情報ファイルを使用します: {credential_path}")
+                    break
         
         self.credential_path = credential_path
         self.client = self._authenticate()
         self.spreadsheet = None
         
         logger.info(f"SpreadsheetManager initialized with spreadsheet ID: {self.spreadsheet_id}")
-    
-    def _load_config(self) -> configparser.ConfigParser:
-        """
-        設定ファイルを読み込む
-        
-        Returns:
-            configparser.ConfigParser: 設定情報
-        """
-        config = configparser.ConfigParser()
-        base_dir = Path(__file__).resolve().parent.parent.parent
-        config_path = os.path.join(base_dir, 'config', 'settings.ini')
-        
-        if not os.path.exists(config_path):
-            logger.error(f"Config file not found: {config_path}")
-            raise FileNotFoundError(f"Config file not found: {config_path}")
-        
-        config.read(config_path)
-        return config
+        logger.info(f"Using credential file: {self.credential_path}")
     
     def _authenticate(self) -> gspread.Client:
         """
@@ -132,7 +148,8 @@ class SpreadsheetManager:
         ワークシートを取得する
         
         Args:
-            sheet_key (str): シートのキー ('users_all', 'entryprocess_all', 'logging')
+            sheet_key (str): シート名またはシートのキー
+                           （'entryprocess_all', 'users_all', 'logging', 'data_ep'など）
             
         Returns:
             gspread.Worksheet: 取得したワークシート
@@ -140,10 +157,35 @@ class SpreadsheetManager:
         if self.spreadsheet is None:
             self.open_spreadsheet()
         
-        sheet_name = self.sheet_names.get(sheet_key)
-        if not sheet_name:
-            logger.error(f"Invalid sheet key: {sheet_key}")
-            raise ValueError(f"Invalid sheet key: {sheet_key}")
+        # settings.iniから対応するシート名を取得
+        sheet_name = None
+        try:
+            # 引数として渡されたsheet_keyがsettings.iniで定義されている「値」と一致するか確認
+            # SHEET_NAMESセクションの全キーを取得
+            sheet_name_configs = env.get_config_file()
+            config = configparser.ConfigParser()
+            config.read(str(sheet_name_configs), encoding='utf-8')
+            
+            if 'SHEET_NAMES' in config:
+                sheet_name_dict = dict(config['SHEET_NAMES'])
+                
+                # 値としてsheet_keyと一致するものを探す
+                for config_key, config_value in sheet_name_dict.items():
+                    # 設定ファイルの値は引用符で囲まれていることがあるので削除する
+                    clean_value = config_value.strip('"\'')
+                    if clean_value == sheet_key:
+                        logger.debug(f"シートキー '{sheet_key}' は設定ファイルに存在しています")
+                        sheet_name = sheet_key
+                        break
+            
+            if not sheet_name:
+                # 見つからなかった場合は直接シート名として使用
+                sheet_name = sheet_key
+                logger.debug(f"シートキー '{sheet_key}' を直接シート名として使用します")
+                
+        except Exception as e:
+            logger.warning(f"設定ファイルからシートキー '{sheet_key}' の解決に失敗しました: {str(e)}")
+            sheet_name = sheet_key  # 設定から取得できない場合は直接シート名として使用
         
         try:
             worksheet = self.spreadsheet.worksheet(sheet_name)
@@ -156,12 +198,45 @@ class SpreadsheetManager:
             logger.error(traceback.format_exc())
             raise
     
+    def get_worksheet_by_gid(self, gid: int) -> gspread.Worksheet:
+        """
+        GIDを使ってワークシートを取得する
+        
+        Args:
+            gid (int): ワークシートのGID
+            
+        Returns:
+            gspread.Worksheet: 取得したワークシート
+            
+        Raises:
+            ValueError: 指定したGIDのワークシートが見つからない場合
+        """
+        if self.spreadsheet is None:
+            self.open_spreadsheet()
+        
+        try:
+            worksheets = self.spreadsheet.worksheets()
+            for sheet in worksheets:
+                if sheet.id == gid:
+                    logger.info(f"Successfully got worksheet with GID {gid}: '{sheet.title}'")
+                    return sheet
+            
+            # 指定したGIDが見つからない場合
+            logger.error(f"Worksheet with GID {gid} not found")
+            raise ValueError(f"Worksheet with GID {gid} not found")
+            
+        except Exception as e:
+            logger.error(f"Failed to get worksheet with GID {gid}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
+    
     def clear_worksheet(self, sheet_key: str) -> None:
         """
         ワークシートのデータをクリアする
         
         Args:
-            sheet_key (str): シートのキー ('users_all', 'entryprocess_all', 'logging')
+            sheet_key (str): シート名またはシートのキー
         """
         worksheet = self.get_worksheet(sheet_key)
         
@@ -169,9 +244,9 @@ class SpreadsheetManager:
             # ヘッダー行を保持するため、2行目以降をクリア
             if worksheet.row_count > 1:
                 worksheet.batch_clear(["A2:ZZ"])
-                logger.info(f"Successfully cleared worksheet: {self.sheet_names.get(sheet_key)}")
+                logger.info(f"Successfully cleared worksheet: {worksheet.title}")
             else:
-                logger.warning(f"Worksheet {self.sheet_names.get(sheet_key)} has no data to clear")
+                logger.warning(f"Worksheet {worksheet.title} has no data to clear")
                 
         except Exception as e:
             logger.error(f"Failed to clear worksheet: {str(e)}")
@@ -267,7 +342,7 @@ class SpreadsheetManager:
                     if i + batch_size < len(data):
                         time.sleep(1)
             
-            logger.info(f"Successfully imported {len(data)} rows from CSV to worksheet: {self.sheet_names.get(sheet_key)}")
+            logger.info(f"Successfully imported {len(data)} rows from CSV to worksheet: {worksheet.title}")
             
         except Exception as e:
             logger.error(f"Failed to import CSV to worksheet: {str(e)}")

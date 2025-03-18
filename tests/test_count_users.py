@@ -20,9 +20,31 @@ root_dir = Path(__file__).parent.parent
 sys.path.append(str(root_dir))
 
 from src.utils.spreadsheet import SpreadsheetManager
+from src.utils.environment import EnvironmentUtils as env
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+def list_sheets_info(spreadsheet_manager):
+    """
+    スプレッドシート内の全シートの情報を取得して表示する
+    
+    Args:
+        spreadsheet_manager (SpreadsheetManager): スプレッドシート操作用のインスタンス
+    """
+    try:
+        # スプレッドシートのプロパティを取得
+        spreadsheet = spreadsheet_manager.spreadsheet
+        
+        # 各シートの情報を取得
+        for sheet in spreadsheet.worksheets():
+            sheet_title = sheet.title
+            logger.info(f"シート: '{sheet_title}'")
+        
+    except Exception as e:
+        logger.error(f"シート情報の取得に失敗しました: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 class TestCountUsers:
     """
@@ -43,6 +65,9 @@ class TestCountUsers:
         USERS_ALLシートのデータを集計して、COUNT_USERSシートに
         日付ごとのフェーズ別カウントを記録するテスト
         """
+        # スプレッドシート内の全シートの情報を取得して表示
+        list_sheets_info(spreadsheet_manager)
+        
         # 集計処理を実行
         result = self.count_users_by_phase(spreadsheet_manager)
         
@@ -63,16 +88,29 @@ class TestCountUsers:
         try:
             logger.info("=== フェーズ別ユーザー数の集計処理を開始します ===")
             
+            # settings.iniからシート名を取得
+            try:
+                # 設定ファイルから各シート名を取得
+                users_all_sheet_name = env.get_config_value('SHEET_NAMES', 'USERSALL').strip('"\'')
+                count_users_sheet_name = env.get_config_value('SHEET_NAMES', 'COUNT_USERS').strip('"\'')
+
+                logger.info(f"設定ファイルのシート名:")
+                logger.info(f"  USERSALL: '{users_all_sheet_name}'")
+                logger.info(f"  COUNT_USERS: '{count_users_sheet_name}'")
+            except Exception as e:
+                logger.error(f"設定ファイルからのシート名取得に失敗: {str(e)}")
+                return False
+            
             # 現在の日付を取得 (yyyy/mm/dd形式)
             today = datetime.datetime.now().strftime("%Y/%m/%d")
             logger.info(f"集計日: {today}")
             
             # USERS_ALLシートからデータを取得
-            users_worksheet = spreadsheet_manager.get_worksheet('users_all')
+            users_worksheet = spreadsheet_manager.get_worksheet(users_all_sheet_name)
             users_data = users_worksheet.get_all_values()
             
             if not users_data:
-                logger.error("USERS_ALLシートにデータがありません")
+                logger.error(f"{users_all_sheet_name}シートにデータがありません")
                 return False
             
             # ヘッダー行を取得
@@ -86,7 +124,7 @@ class TestCountUsers:
                     break
             
             if phase_index is None:
-                logger.error("USERS_ALLシートに「フェーズ」列が見つかりません")
+                logger.error(f"{users_all_sheet_name}シートに「フェーズ」列が見つかりません")
                 return False
             
             logger.info(f"フェーズ列のインデックス: {phase_index}")
@@ -112,11 +150,11 @@ class TestCountUsers:
             logger.info(f"フェーズごとのカウント: {phase_counts}")
             
             # COUNT_USERSシートからデータを取得
-            count_worksheet = spreadsheet_manager.get_worksheet('count_users')
+            count_worksheet = spreadsheet_manager.get_worksheet(count_users_sheet_name)
             count_data = count_worksheet.get_all_values()
             
             if not count_data:
-                logger.error("COUNT_USERSシートにデータがありません")
+                logger.error(f"{count_users_sheet_name}シートにデータがありません")
                 return False
             
             # 日付列のインデックスを取得
@@ -130,7 +168,7 @@ class TestCountUsers:
                     break
             
             if target_row_index is None:
-                logger.warning(f"COUNT_USERSシートに日付 {today} の行が見つかりません。新しい行を追加します。")
+                logger.warning(f"{count_users_sheet_name}シートに日付 {today} の行が見つかりません。新しい行を追加します。")
                 # 新しい行を追加する
                 try:
                     # 空の行を作成
