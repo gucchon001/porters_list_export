@@ -15,6 +15,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 from src.utils.logging_config import get_logger
 from src.utils.environment import EnvironmentUtils as env
+from src.utils.slack_notifier import SlackNotifier
 
 logger = get_logger(__name__)
 
@@ -40,6 +41,9 @@ class PortersBrowser:
         self.driver = None
         self.wait = None
         self.timeout = timeout
+        
+        # Slack通知用のインスタンスを初期化
+        self.slack = SlackNotifier(webhook_url="https://hooks.slack.com/services/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")
         
         # settings.iniからheadlessモードの設定を読み込む（引数で指定がなければ）
         if headless is None:
@@ -214,9 +218,8 @@ class PortersBrowser:
             return True
             
         except Exception as e:
-            logger.error(f"WebDriverのセットアップ中にエラーが発生しました: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+            error_message = "WebDriverのセットアップ中にエラーが発生しました"
+            self._notify_error(error_message, e, {"設定": f"headless={self.headless}, timeout={self.timeout}"})
             return False
     
     def _load_selectors(self):
@@ -501,22 +504,26 @@ class PortersBrowser:
             self.save_screenshot("window_switch_error.png")
             return False
     
-    def quit(self):
+    def quit(self, error_message=None, exception=None, context=None):
         """
         WebDriverを終了する
         
-        Returns:
-            bool: 終了が成功した場合はTrue、失敗した場合はFalse
+        Args:
+            error_message (str, optional): 通知するエラーメッセージ
+            exception (Exception, optional): 例外オブジェクト
+            context (dict, optional): エラーコンテキスト情報
         """
+        if error_message:
+            self._notify_error(error_message, exception, context)
+            
         if self.driver:
             try:
                 self.driver.quit()
-                logger.info("WebDriverを終了しました")
-                return True
+                logger.info("WebDriverを正常に終了しました")
             except Exception as e:
-                logger.error(f"WebDriverの終了中にエラーが発生しました: {str(e)}")
-                return False
-        return True
+                logger.warning(f"WebDriver終了時にエラーが発生しました: {str(e)}")
+            finally:
+                self.driver = None
         
     @classmethod
     def login_to_porters(cls, selectors_path=None, headless=None):
@@ -528,7 +535,7 @@ class PortersBrowser:
             headless (bool): ヘッドレスモードで実行するかどうか (Noneの場合はsettings.iniから読み込む)
         
         Returns:
-            tuple: (success, browser, login) 処理成功の場合はTrue、失敗の場合はFalse、およびブラウザとログインオブジェクト
+            tuple: (success, browser, login) 処理成功の場合はTrue、失敗した場合はFalse、およびブラウザとログインオブジェクト
         """
         from src.modules.porters.login import PortersLogin
         
@@ -547,6 +554,11 @@ class PortersBrowser:
             login = PortersLogin(browser)
             if not login.execute():
                 logger.error("ログイン処理に失敗しました")
+                # Slack通知
+                browser._notify_error(
+                    "PORTERSへのログイン処理に失敗しました", 
+                    context={"ヘッドレスモード": str(headless), "セレクタパス": str(selectors_path)}
+                )
                 browser.quit()
                 return False, None, None
             
@@ -558,11 +570,29 @@ class PortersBrowser:
             return True, browser, login
             
         except Exception as e:
-            logger.error(f"PORTERSシステムへのログイン処理中にエラーが発生しました: {str(e)}")
+            error_message = "PORTERSシステムへのログイン処理中にエラーが発生しました"
+            logger.error(f"{error_message}: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
+            
+            # インスタンスが作成されていればSlack通知
             if 'browser' in locals() and browser:
+                browser._notify_error(
+                    error_message, 
+                    exception=e, 
+                    context={"ヘッドレスモード": str(headless), "セレクタパス": str(selectors_path)}
+                )
                 browser.quit()
+            else:
+                # インスタンスがなければ一時的なSlackNotifierを作成して通知
+                slack = SlackNotifier(webhook_url="https://hooks.slack.com/services/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")
+                slack.send_error(
+                    error_message=error_message,
+                    exception=e,
+                    title="PORTERSログインエラー",
+                    context={"ヘッドレスモード": str(headless), "セレクタパス": str(selectors_path)}
+                )
+            
             return False, None, None
     
     def set_headless_mode(self, headless_mode):
@@ -590,4 +620,51 @@ class PortersBrowser:
             return result
         except Exception as e:
             logger.error(f"ヘッドレスモード設定の変更中にエラーが発生しました: {str(e)}")
-            return False 
+            return False
+    
+    def _notify_error(self, error_message, exception=None, context=None):
+        """
+        エラーが発生した際にログに記録し、Slackに通知する
+        
+        Args:
+            error_message (str): エラーメッセージ
+            exception (Exception, optional): 発生した例外
+            context (dict, optional): エラーのコンテキスト情報
+        
+        Returns:
+            bool: 通知が成功した場合はTrue、失敗した場合はFalse
+        """
+        # エラーをログに記録
+        if exception:
+            logger.error(f"{error_message}: {str(exception)}")
+            import traceback
+            logger.error(traceback.format_exc())
+        else:
+            logger.error(error_message)
+        
+        # スクリーンショットを撮影
+        screenshot_path = None
+        if self.driver:
+            error_screenshot = f"error_{datetime.now().strftime('%H%M%S')}.png"
+            if self.save_screenshot(error_screenshot):
+                screenshot_path = os.path.join(self.screenshot_dir, error_screenshot)
+        
+        # コンテキスト情報を準備
+        ctx = context or {}
+        if screenshot_path:
+            ctx["スクリーンショット"] = f"保存済み: {screenshot_path}"
+        
+        # 現在のURLを追加
+        if self.driver:
+            try:
+                ctx["現在のURL"] = self.driver.current_url
+            except:
+                ctx["現在のURL"] = "取得できません"
+        
+        # Slackに通知
+        return self.slack.send_error(
+            error_message=error_message,
+            exception=exception,
+            title="PORTERSブラウザ操作エラー",
+            context=ctx
+        ) 

@@ -25,8 +25,12 @@ from src.utils.logging_config import get_logger
 from src.modules.porters.browser import PortersBrowser
 from src.modules.porters.operations import PortersOperations
 from src.modules.spreadsheet_aggregator import SpreadsheetAggregator
+from src.utils.slack_notifier import SlackNotifier
 
 logger = get_logger(__name__)
+
+# SlackNotifierのインスタンスを作成
+slack = SlackNotifier(webhook_url="https://hooks.slack.com/services/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")
 
 def setup_environment():
     """
@@ -259,9 +263,25 @@ def main():
                 return 1
                 
         except Exception as e:
-            logger.error(f"処理中に例外が発生しました: {str(e)}")
+            error_message = "処理中に例外が発生しました"
+            logger.error(f"{error_message}: {str(e)}")
             import traceback
-            logger.error(traceback.format_exc())
+            trace = traceback.format_exc()
+            logger.error(trace)
+            
+            # Slack通知を送信
+            slack.send_error(
+                error_message=error_message,
+                exception=e,
+                title="PORTERSシステム処理エラー",
+                context={
+                    "処理フロー": args.process,
+                    "集計処理": args.aggregate,
+                    "実行環境": args.env,
+                    "traceback": trace[:1000] + ("..." if len(trace) > 1000 else "")
+                }
+            )
+            
             logger.info("================================================================================")
             logger.info("PORTERSシステムログインツールを異常終了します")
             logger.info("================================================================================")
@@ -272,15 +292,39 @@ def main():
             if browser:
                 logger.info("ブラウザを終了します")
                 try:
-                    browser.quit()
+                    # エラーフラグが立っている場合はエラーメッセージを含めて終了
+                    if not porters_success:
+                        browser.quit(
+                            error_message="処理が正常に完了しませんでした", 
+                            context={
+                                "処理フロー": args.process, 
+                                "集計処理": args.aggregate, 
+                                "実行環境": args.env
+                            }
+                        )
+                    else:
+                        browser.quit()
                     logger.info("ブラウザを正常に終了しました")
                 except Exception as e:
                     logger.error(f"ブラウザの終了中に例外が発生しました: {str(e)}")
             
     except Exception as e:
-        logger.error(f"予期しないエラーが発生しました: {str(e)}")
+        error_message = "予期しないエラーが発生しました"
+        logger.error(f"{error_message}: {str(e)}")
         import traceback
-        logger.error(traceback.format_exc())
+        trace = traceback.format_exc()
+        logger.error(trace)
+        
+        # Slack通知を送信
+        slack.send_error(
+            error_message=error_message,
+            exception=e,
+            title="PORTERSシステム予期しないエラー",
+            context={
+                "traceback": trace[:1000] + ("..." if len(trace) > 1000 else "")
+            }
+        )
+        
         logger.info("================================================================================")
         logger.info("PORTERSシステムログインツールを異常終了します")
         logger.info("================================================================================")
