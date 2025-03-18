@@ -26,8 +26,8 @@ set "SCRIPT_MODULE=src.main"
 
 REM スクリプトが存在するか確認（ファイルチェックは src\main.py を使用）
 if exist "src\main.py" (
-    echo [INFO] スクリプトを実行しています: %SCRIPT_MODULE%
-    python -m %SCRIPT_MODULE%
+    echo [INFO] スクリプトを実行しています: %SCRIPT_MODULE% --process sequential --aggregate both
+    python -m %SCRIPT_MODULE% --process sequential --aggregate both
     if errorlevel 1 (
         echo [ERROR] スクリプトの実行中にエラーが発生しました。
         pause
