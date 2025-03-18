@@ -43,7 +43,7 @@ class PortersBrowser:
         self.timeout = timeout
         
         # Slack通知用のインスタンスを初期化
-        self.slack = SlackNotifier(webhook_url="https://hooks.slack.com/services/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")
+        self.slack = SlackNotifier()
         
         # settings.iniからheadlessモードの設定を読み込む（引数で指定がなければ）
         if headless is None:
@@ -176,7 +176,7 @@ class PortersBrowser:
     
     def setup(self):
         """
-        WebDriverのセットアップ
+        WebDriverをセットアップする
         
         Returns:
             bool: セットアップが成功した場合はTrue、失敗した場合はFalse
@@ -184,18 +184,37 @@ class PortersBrowser:
         try:
             logger.info("WebDriverのセットアップを開始します")
             
-            # Chromeオプションの設定
-            chrome_options = Options()
+            # ヘッドレスモードの設定
+            chrome_options = webdriver.ChromeOptions()
+            
             if self.headless:
                 logger.info("ヘッドレスモードで実行します")
-                chrome_options.add_argument("--headless")
+                chrome_options.add_argument('--headless')
+                chrome_options.add_argument('--disable-gpu')
+                chrome_options.add_argument('--no-sandbox')
+                chrome_options.add_argument('--disable-dev-shm-usage')
+                chrome_options.add_argument('--window-size=1920,1080')
             else:
                 logger.info("ブラウザ表示モードで実行します")
             
-            chrome_options.add_argument("--window-size=1920,1080")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
+            # UAの設定
+            user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36'
+            chrome_options.add_argument(f'--user-agent={user_agent}')
+            
+            # その他のオプション
+            chrome_options.add_argument('--ignore-certificate-errors')
+            chrome_options.add_argument('--allow-running-insecure-content')
+            chrome_options.add_argument('--lang=ja')
+            
+            # ブラウザウィンドウのクラッシュを防止
+            chrome_options.add_argument('--disable-features=RendererCodeIntegrity')
+            
+            # 通知を無効化
+            chrome_options.add_argument('--disable-notifications')
+            
+            # ChromeDriverを最新の互換性のあるバージョンに自動更新
+            from webdriver_manager.chrome import ChromeDriverManager
+            from selenium.webdriver.chrome.service import Service as ChromeService
             
             # ダウンロード設定
             download_dir = os.path.join(os.getcwd(), "downloads")
@@ -209,8 +228,9 @@ class PortersBrowser:
             }
             chrome_options.add_experimental_option("prefs", prefs)
             
-            # WebDriverの初期化
-            self.driver = webdriver.Chrome(options=chrome_options)
+            # WebDriverの初期化 (ChromeDriverManagerを使用)
+            service = ChromeService(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
             self.driver.maximize_window()
             self.wait = WebDriverWait(self.driver, self.timeout)
             
@@ -461,48 +481,90 @@ class PortersBrowser:
             
             return False
     
-    def switch_to_new_window(self, current_handles=None):
+    def switch_to_new_window(self, current_handles=None, timeout=10, retries=3):
         """
         新しく開いたウィンドウに切り替える
         
         Args:
-            current_handles (list, optional): 現在のウィンドウハンドルのリスト。指定がない場合は現在のハンドルを使用
+            current_handles (list, optional): 切り替え前のウィンドウハンドルリスト
+            timeout (int, optional): 新しいウィンドウが開くまで待機する時間(秒)
+            retries (int, optional): 失敗時のリトライ回数
             
         Returns:
             bool: 切り替えが成功した場合はTrue、失敗した場合はFalse
         """
-        try:
-            if current_handles is None:
-                current_handles = [self.driver.current_window_handle]
-            
-            logger.info(f"現在のウィンドウハンドル: {current_handles}")
-            
-            # 新しいウィンドウが開くのを待機
-            time.sleep(5)  # 十分な待機時間
-            
-            # 新しいウィンドウに切り替え
-            new_handles = self.driver.window_handles
-            logger.info(f"操作後のウィンドウハンドル一覧: {new_handles}")
-            
-            if len(new_handles) > len(current_handles):
-                # 新しいウィンドウが開かれた場合
-                new_window = [handle for handle in new_handles if handle not in current_handles][0]
-                logger.info(f"新しいウィンドウに切り替えます: {new_window}")
-                self.driver.switch_to.window(new_window)
-                logger.info("✓ 新しいウィンドウにフォーカスを切り替えました")
-                
-                # 新しいウィンドウで読み込みを待機
-                time.sleep(3)
-                self.save_screenshot("new_window.png")
-                return True
-            else:
-                logger.warning("新しいウィンドウが開かれませんでした")
-                return False
-                
-        except Exception as e:
-            logger.error(f"新しいウィンドウへの切り替え中にエラーが発生しました: {str(e)}")
-            self.save_screenshot("window_switch_error.png")
+        if not self.driver:
+            logger.error("WebDriverが初期化されていません")
             return False
+            
+        # 現在のウィンドウハンドルが指定されていない場合は取得
+        if current_handles is None:
+            try:
+                current_handles = self.driver.window_handles
+                logger.info(f"現在のウィンドウハンドル: {current_handles}")
+            except Exception as e:
+                logger.error(f"現在のウィンドウハンドルの取得に失敗しました: {str(e)}")
+                return False
+        
+        retry_count = 0
+        while retry_count < retries:
+            try:
+                # 新しいウィンドウが開くまで待機
+                start_time = time.time()
+                new_handle = None
+                
+                while time.time() - start_time < timeout:
+                    try:
+                        # 現在のハンドルを再取得（セッションが無効になっていないか確認）
+                        handles = self.driver.window_handles
+                        
+                        # 新しいウィンドウを探す
+                        for handle in handles:
+                            if handle not in current_handles:
+                                new_handle = handle
+                                break
+                        
+                        if new_handle:
+                            break
+                            
+                        time.sleep(0.5)  # 短い間隔で再試行
+                    except Exception as inner_e:
+                        logger.warning(f"ウィンドウハンドルの取得中にエラーが発生しました（リトライ中）: {str(inner_e)}")
+                        time.sleep(1)
+                        continue
+                
+                if not new_handle:
+                    logger.warning(f"新しいウィンドウが見つかりませんでした（{timeout}秒待機後）")
+                    # スクリーンショットを撮影してエラーを記録
+                    self.save_screenshot(f"window_switch_timeout_{retry_count}.png")
+                    retry_count += 1
+                    time.sleep(1)  # リトライ前に待機
+                    continue
+                
+                # 新しいウィンドウに切り替え
+                self.driver.switch_to.window(new_handle)
+                
+                # 切り替え後のURLを表示
+                logger.info(f"新しいウィンドウに切り替えました: {self.driver.current_url}")
+                
+                # 切り替え後のスクリーンショット
+                self.save_screenshot("after_window_switch.png")
+                
+                return True
+                
+            except Exception as e:
+                retry_count += 1
+                logger.warning(f"新しいウィンドウへの切り替え中にエラーが発生しました (リトライ {retry_count}/{retries}): {str(e)}")
+                
+                if retry_count >= retries:
+                    logger.error(f"新しいウィンドウへの切り替えに失敗しました（{retries}回リトライ後）")
+                    self.save_screenshot("window_switch_error.png")
+                    return False
+                
+                # リトライ前に待機
+                time.sleep(2)
+        
+        return False
     
     def quit(self, error_message=None, exception=None, context=None):
         """
@@ -585,7 +647,7 @@ class PortersBrowser:
                 browser.quit()
             else:
                 # インスタンスがなければ一時的なSlackNotifierを作成して通知
-                slack = SlackNotifier(webhook_url="https://hooks.slack.com/services/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")
+                slack = SlackNotifier()
                 slack.send_error(
                     error_message=error_message,
                     exception=e,
@@ -667,4 +729,346 @@ class PortersBrowser:
             exception=exception,
             title="PORTERSブラウザ操作エラー",
             context=ctx
-        ) 
+        )
+    
+    @classmethod
+    def execute_workflow_session(cls, workflow_func, selectors_path=None, headless=None, workflow_params=None):
+        """
+        PORTERSシステムに接続し、指定されたワークフローを実行し、適切にログアウトする一連のセッションを管理する
+        
+        Args:
+            workflow_func (callable): 実行するワークフロー関数。browser, loginオブジェクトを引数として受け取り、
+                                     成功時にはTrueを、失敗時にはFalseを返す必要がある
+            selectors_path (str): セレクタ情報を含むCSVファイルのパス
+            headless (bool): ヘッドレスモードで実行するかどうか (Noneの場合はsettings.iniから読み込む)
+            workflow_params (dict): ワークフロー関数に渡す追加パラメータ
+        
+        Returns:
+            tuple: (success, results) セッション全体の成功/失敗と、ワークフロー関数の戻り値
+        """
+        from src.utils.logging_config import get_logger
+        from src.utils.slack_notifier import SlackNotifier
+        
+        logger = get_logger(__name__)
+        workflow_params = workflow_params or {}
+        browser = None
+        login = None
+        workflow_results = None
+        
+        try:
+            logger.info("=== PORTERSシステムセッションを開始します ===")
+            
+            # PORTERSへのログイン
+            success, browser, login = cls.login_to_porters(
+                selectors_path=selectors_path, 
+                headless=headless
+            )
+            
+            if not success:
+                logger.error("ログイン処理に失敗したため、処理を中止します")
+                return False, None
+                
+            logger.info("ログイン処理が完了しました")
+            
+            # ワークフロー関数を実行
+            logger.info(f"ワークフロー処理を開始します: {workflow_func.__name__}")
+            workflow_success = False
+            
+            try:
+                # ワークフローにブラウザとログインオブジェクトを渡す
+                workflow_results = workflow_func(browser=browser, login=login, **workflow_params)
+                
+                # 戻り値がタプルまたはリストの場合、最初の要素を成功/失敗フラグとして扱う
+                if isinstance(workflow_results, (tuple, list)) and len(workflow_results) > 0:
+                    workflow_success = bool(workflow_results[0])
+                else:
+                    workflow_success = bool(workflow_results)
+                
+                if workflow_success:
+                    logger.info(f"ワークフロー処理が正常に完了しました: {workflow_func.__name__}")
+                else:
+                    logger.error(f"ワークフロー処理に失敗しました: {workflow_func.__name__}")
+            except Exception as e:
+                error_message = f"ワークフロー処理中に例外が発生しました: {workflow_func.__name__}"
+                logger.error(f"{error_message}: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                
+                # エラー通知
+                if browser:
+                    browser._notify_error(
+                        error_message,
+                        exception=e,
+                        context={"ワークフロー": workflow_func.__name__, "パラメータ": str(workflow_params)}
+                    )
+            
+            # ログアウト処理
+            if login:
+                try:
+                    logger.info("ログアウト処理を開始します")
+                    logout_result = login.logout()
+                    if logout_result:
+                        logger.info("ログアウト処理が正常に完了しました")
+                    else:
+                        logger.warning("ログアウト処理に失敗しました")
+                except Exception as e:
+                    logger.error(f"ログアウト処理中に例外が発生しました: {str(e)}")
+            
+            # 操作完了後の待機時間
+            import time
+            logger.info("操作完了後、3秒間待機します")
+            time.sleep(3)
+            
+            return workflow_success, workflow_results
+            
+        except Exception as e:
+            error_message = "PORTERSシステムセッション処理中に例外が発生しました"
+            logger.error(f"{error_message}: {str(e)}")
+            import traceback
+            trace = traceback.format_exc()
+            logger.error(trace)
+            
+            # インスタンスが作成されていればSlack通知
+            if 'browser' in locals() and browser:
+                browser._notify_error(
+                    error_message, 
+                    exception=e, 
+                    context={
+                        "ワークフロー": workflow_func.__name__ if workflow_func else "不明",
+                        "ヘッドレスモード": str(headless),
+                        "セレクタパス": str(selectors_path)
+                    }
+                )
+            else:
+                # インスタンスがなければ一時的なSlackNotifierを作成して通知
+                slack = SlackNotifier()
+                slack.send_error(
+                    error_message=error_message,
+                    exception=e,
+                    title="PORTERSシステムセッションエラー",
+                    context={
+                        "ワークフロー": workflow_func.__name__ if workflow_func else "不明",
+                        "ヘッドレスモード": str(headless),
+                        "セレクタパス": str(selectors_path)
+                    }
+                )
+            
+            return False, None
+            
+        finally:
+            # 必ずブラウザを終了する
+            if browser:
+                logger.info("ブラウザを終了します")
+                try:
+                    # ワークフローが成功しなかった場合はエラーメッセージを含めて終了
+                    if not workflow_success:
+                        browser.quit(
+                            error_message="ワークフロー処理が正常に完了しませんでした", 
+                            context={
+                                "ワークフロー": workflow_func.__name__ if workflow_func else "不明",
+                                "ヘッドレスモード": str(headless),
+                                "セレクタパス": str(selectors_path)
+                            }
+                        )
+                    else:
+                        browser.quit()
+                    logger.info("ブラウザを正常に終了しました")
+                except Exception as e:
+                    logger.error(f"ブラウザの終了中に例外が発生しました: {str(e)}") 
+
+    def get_window_handles(self):
+        """
+        現在のウィンドウハンドルのリストを取得する
+        
+        Returns:
+            list: ウィンドウハンドルのリスト。エラーが発生した場合は空リスト
+        """
+        try:
+            if not self.driver:
+                logger.error("WebDriverが初期化されていません")
+                return []
+            return self.driver.window_handles
+        except Exception as e:
+            error_message = "ウィンドウハンドル取得中にエラーが発生しました"
+            self._notify_error(error_message, e)
+            return []
+
+    def get_page_source(self):
+        """
+        現在のページのHTMLソースを取得する
+        
+        Returns:
+            str: HTMLソース。エラーが発生した場合は空文字列
+        """
+        try:
+            if not self.driver:
+                logger.error("WebDriverが初期化されていません")
+                return ""
+            return self.driver.page_source
+        except Exception as e:
+            error_message = "ページソース取得中にエラーが発生しました"
+            self._notify_error(error_message, e)
+            return ""
+
+    def get_current_url(self):
+        """
+        現在のページのURLを取得する
+        
+        Returns:
+            str: 現在のURL。エラーが発生した場合は空文字列
+        """
+        try:
+            if not self.driver:
+                logger.error("WebDriverが初期化されていません")
+                return ""
+            return self.driver.current_url
+        except Exception as e:
+            error_message = "URL取得中にエラーが発生しました"
+            self._notify_error(error_message, e)
+            return ""
+
+    def get_page_title(self):
+        """
+        現在のページのタイトルを取得する
+        
+        Returns:
+            str: ページタイトル。エラーが発生した場合は空文字列
+        """
+        try:
+            if not self.driver:
+                logger.error("WebDriverが初期化されていません")
+                return ""
+            return self.driver.title
+        except Exception as e:
+            error_message = "ページタイトル取得中にエラーが発生しました"
+            self._notify_error(error_message, e)
+            return ""
+
+    def execute_script(self, script, *args):
+        """
+        JavaScriptを実行する
+        
+        Args:
+            script (str): 実行するJavaScriptコード
+            *args: JavaScriptに渡す引数
+            
+        Returns:
+            any: JavaScriptの実行結果。エラーが発生した場合はNone
+        """
+        try:
+            if not self.driver:
+                logger.error("WebDriverが初期化されていません")
+                return None
+            return self.driver.execute_script(script, *args)
+        except Exception as e:
+            error_message = "JavaScriptの実行中にエラーが発生しました"
+            self._notify_error(error_message, e)
+            return None
+
+    def scroll_to_element(self, element, position="center"):
+        """
+        要素が画面内に表示されるようにスクロールする
+        
+        Args:
+            element (WebElement): スクロール対象の要素
+            position (str): スクロール位置（"start", "center", "end", "nearest"）
+            
+        Returns:
+            bool: スクロールが成功した場合はTrue、失敗した場合はFalse
+        """
+        try:
+            if not self.driver:
+                logger.error("WebDriverが初期化されていません")
+                return False
+            self.driver.execute_script(f"arguments[0].scrollIntoView({{block: '{position}'}});", element)
+            time.sleep(1)  # スクロール完了を待機
+            return True
+        except Exception as e:
+            error_message = "要素へのスクロール中にエラーが発生しました"
+            self._notify_error(error_message, e)
+            return False
+
+    def find_elements(self, by, value):
+        """
+        指定されたセレクタに一致する複数の要素を取得する
+        
+        Args:
+            by (By): 検索方法（By.CSS_SELECTOR, By.XPATHなど）
+            value (str): セレクタの値
+            
+        Returns:
+            list: 見つかった要素のリスト。見つからない場合は空リスト
+        """
+        try:
+            if not self.driver:
+                logger.error("WebDriverが初期化されていません")
+                return []
+            return self.driver.find_elements(by, value)
+        except Exception as e:
+            error_message = f"要素の検索中にエラーが発生しました: {by}={value}"
+            self._notify_error(error_message, e)
+            return []
+
+    def find_elements_by_tag(self, tag, text_filter=None):
+        """
+        指定されたタグ名の要素を検索し、オプションでテキスト内容でフィルタリングする
+        
+        Args:
+            tag (str): 検索するHTML要素のタグ名
+            text_filter (str, optional): 要素のテキストに含まれるべき文字列
+            
+        Returns:
+            list: 見つかった要素のリスト。見つからない場合は空リスト
+        """
+        try:
+            if not self.driver:
+                logger.error("WebDriverが初期化されていません")
+                return []
+            
+            elements = self.driver.find_elements(By.TAG_NAME, tag)
+            
+            if text_filter:
+                filtered_elements = []
+                for element in elements:
+                    try:
+                        if text_filter in element.text:
+                            filtered_elements.append(element)
+                    except:
+                        continue
+                return filtered_elements
+            
+            return elements
+        except Exception as e:
+            error_message = f"{tag}タグの要素検索中にエラーが発生しました"
+            self._notify_error(error_message, e)
+            return []
+
+    def wait_for_element(self, by, value, condition=EC.presence_of_element_located, timeout=None):
+        """
+        指定された条件で要素を待機する
+        
+        Args:
+            by (By): 検索方法（By.CSS_SELECTOR, By.XPATHなど）
+            value (str): セレクタの値
+            condition (function, optional): 待機条件。デフォルトはEC.presence_of_element_located
+            timeout (int, optional): タイムアウト時間（秒）。未指定時はデフォルトのタイムアウトを使用
+            
+        Returns:
+            WebElement: 見つかった要素。見つからない場合はNone
+        """
+        try:
+            if not self.driver:
+                logger.error("WebDriverが初期化されていません")
+                return None
+            
+            wait_timeout = timeout or self.timeout
+            return WebDriverWait(self.driver, wait_timeout).until(
+                condition((by, value))
+            )
+        except TimeoutException:
+            logger.warning(f"要素の待機中にタイムアウトが発生しました: {by}={value}")
+            return None
+        except Exception as e:
+            error_message = f"要素の待機中にエラーが発生しました: {by}={value}"
+            self._notify_error(error_message, e)
+            return None 

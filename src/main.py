@@ -5,9 +5,7 @@
 PORTERSシステムへのログイン処理と二重ログイン回避を実装するメインスクリプト
 
 このスクリプトは、PORTERSシステムへのログイン処理と二重ログイン回避の機能を提供します。
-Seleniumを使用してブラウザを制御し、ログイン画面へのアクセス、認証情報の入力、
-ログインボタンのクリック、二重ログインポップアップの処理を行います。
-また、ログイン後に「その他業務」ボタンをクリックしてメニュー項目5を押す処理も実行します。
+処理フローの選択と引数の準備に特化し、実際の実行はPortersBrowserクラスに委譲します。
 """
 
 import os
@@ -29,8 +27,8 @@ from src.utils.slack_notifier import SlackNotifier
 
 logger = get_logger(__name__)
 
-# SlackNotifierのインスタンスを作成
-slack = SlackNotifier(webhook_url="https://hooks.slack.com/services/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")
+# SlackNotifierのインスタンスを作成 (環境変数から設定を読み込む)
+slack = SlackNotifier()
 
 def setup_environment():
     """
@@ -72,17 +70,175 @@ def parse_arguments():
     
     return parser.parse_args()
 
+def candidates_workflow(browser, login, **kwargs):
+    """
+    求職者一覧の処理フローを実行する
+    
+    Args:
+        browser (PortersBrowser): ブラウザオブジェクト
+        login (PortersLogin): ログインオブジェクト
+        **kwargs: その他のパラメータ
+        
+    Returns:
+        bool: 処理が成功した場合はTrue、失敗した場合はFalse
+    """
+    logger.info("求職者一覧のエクスポート処理フローを実行します")
+    operations = PortersOperations(browser)
+    success = operations.execute_operations_flow()
+    
+    if success:
+        logger.info("求職者一覧のエクスポート処理フローが正常に完了しました")
+    else:
+        logger.error("求職者一覧のエクスポート処理フローに失敗しました")
+        
+    return success
+
+def entryprocess_workflow(browser, login, **kwargs):
+    """
+    選考プロセス一覧の処理フローを実行する
+    
+    Args:
+        browser (PortersBrowser): ブラウザオブジェクト
+        login (PortersLogin): ログインオブジェクト
+        **kwargs: その他のパラメータ
+        
+    Returns:
+        bool: 処理が成功した場合はTrue、失敗した場合はFalse
+    """
+    logger.info("選考プロセス一覧の表示処理フローを実行します")
+    operations = PortersOperations(browser)
+    success = operations.access_selection_processes()
+    
+    if success:
+        logger.info("選考プロセス一覧の表示処理フローが正常に完了しました")
+    else:
+        logger.error("選考プロセス一覧の表示処理フローに失敗しました")
+        
+    return success
+
+def both_workflow(browser, login, **kwargs):
+    """
+    求職者一覧と選考プロセス一覧の両方の処理フローを順に実行する
+    
+    Args:
+        browser (PortersBrowser): ブラウザオブジェクト
+        login (PortersLogin): ログインオブジェクト
+        **kwargs: その他のパラメータ
+        
+    Returns:
+        tuple: (success, (candidates_success, entryprocess_success)) 全体の成功/失敗と、各処理の成功/失敗
+    """
+    logger.info("=== 両方の処理フローを順に実行します ===")
+    operations = PortersOperations(browser)
+    
+    # 求職者一覧の処理フロー
+    logger.info("1. 求職者一覧のエクスポート処理フローを実行します")
+    candidates_success = operations.execute_operations_flow()
+    
+    if candidates_success:
+        logger.info("求職者一覧のエクスポート処理フローが正常に完了しました")
+    else:
+        logger.error("求職者一覧のエクスポート処理フローに失敗しました")
+    
+    # 処理間の待機時間
+    logger.info("次の処理に進む前に10秒間待機します")
+    time.sleep(10)
+    
+    # 選考プロセスの処理フロー
+    logger.info("2. 選考プロセス一覧の表示処理フローを実行します")
+    entryprocess_success = operations.access_selection_processes()
+    
+    if entryprocess_success:
+        logger.info("選考プロセス一覧の表示処理フローが正常に完了しました")
+    else:
+        logger.error("選考プロセス一覧の表示処理フローに失敗しました")
+    
+    # 両方の処理結果をログに出力
+    overall_success = candidates_success and entryprocess_success
+    if overall_success:
+        logger.info("✅ 両方の処理フローが正常に完了しました")
+    else:
+        logger.warning("⚠️ 一部の処理フローが失敗しました")
+    
+    return overall_success, (candidates_success, entryprocess_success)
+
+def sequential_workflow(browser, login, **kwargs):
+    """
+    求職者一覧処理後に選考プロセスも実行する連続処理フロー
+    
+    Args:
+        browser (PortersBrowser): ブラウザオブジェクト
+        login (PortersLogin): ログインオブジェクト
+        **kwargs: その他のパラメータ
+        
+    Returns:
+        tuple: (success, (candidates_success, entryprocess_success)) 全体の成功/失敗と、各処理の成功/失敗
+    """
+    logger.info("=== 求職者一覧処理後に選考プロセスも実行します ===")
+    operations = PortersOperations(browser)
+    
+    # PortersOperationsクラスの新しいメソッドを使用
+    candidates_success, entryprocess_success = operations.execute_both_processes()
+    
+    # 両方の処理結果をログに出力
+    overall_success = candidates_success and entryprocess_success
+    if overall_success:
+        logger.info("✅ 両方の処理フローが正常に完了しました")
+    else:
+        logger.warning("⚠️ 一部の処理フローが失敗しました")
+    
+    return overall_success, (candidates_success, entryprocess_success)
+
+def run_aggregation(aggregate_option):
+    """
+    集計処理を実行する
+    
+    Args:
+        aggregate_option (str): 実行する集計処理の種類
+        
+    Returns:
+        bool: 集計処理が成功した場合はTrue、失敗した場合はFalse
+    """
+    logger.info("=== スプレッドシート集計処理を開始します ===")
+    aggregator = SpreadsheetAggregator()
+    
+    # 集計処理を実行
+    users_success, entryprocess_success = aggregator.run_aggregation(aggregate_option)
+    
+    # 結果の集計
+    success_count = 0
+    total_count = 0
+    
+    if aggregate_option in ['users', 'both']:
+        total_count += 1
+        if users_success:
+            success_count += 1
+            logger.info("✅ 求職者フェーズ別集計処理が正常に完了しました")
+        else:
+            logger.error("❌ 求職者フェーズ別集計処理に失敗しました")
+    
+    if aggregate_option in ['entryprocess', 'both']:
+        total_count += 1
+        if entryprocess_success:
+            success_count += 1
+            logger.info("✅ 選考プロセス集計処理が正常に完了しました")
+        else:
+            logger.error("❌ 選考プロセス集計処理に失敗しました")
+    
+    # 集計処理の結果ステータス
+    overall_success = success_count == total_count
+    if overall_success:
+        logger.info("✅ すべての集計処理が正常に完了しました")
+    else:
+        logger.warning(f"⚠️ 実行された {total_count} 件の集計処理のうち、{success_count} 件が成功し、{total_count - success_count} 件が失敗しました")
+    
+    return overall_success, (users_success, entryprocess_success)
+
 def main():
     """
     メイン処理
     
-    以下の処理を実行します：
-    1. 環境設定
-    2. PORTERSシステムへのログイン
-    3. 選択された処理フローの実行（求職者一覧のエクスポート、選考プロセス一覧の表示、または両方）
-    4. スプレッドシートへのデータ集計（オプション）
-    5. ログアウト処理
-    6. ブラウザの終了
+    処理フローの選択と引数の準備に特化し、実際の実行はPortersBrowserクラスに委譲します。
     
     Returns:
         int: 処理が成功した場合は0、失敗した場合は1
@@ -111,203 +267,56 @@ def main():
         # 設定ファイルのパス
         selectors_path = os.path.join(root_dir, "config", "selectors.csv")
         
-        # ブラウザとログインオブジェクトの初期化
-        browser = None
-        login = None
+        # 処理成功フラグ
+        success = True
         
-        # PORTERS操作の結果ステータス
-        porters_success = False
+        # 業務操作のスキップフラグがOFFの場合、PORTERSへログインして処理実行
+        if not args.skip_operations:
+            # 処理フローの選択
+            workflow_func = None
+            if args.process == 'candidates':
+                workflow_func = candidates_workflow
+            elif args.process == 'entryprocess':
+                workflow_func = entryprocess_workflow
+            elif args.process == 'both':
+                workflow_func = both_workflow
+            elif args.process == 'sequential':
+                workflow_func = sequential_workflow
+            
+            # ワークフローパラメータの準備
+            workflow_params = {
+                'env': args.env,
+                'process': args.process
+            }
+            
+            # ワークフローセッションの実行
+            success, workflow_results = PortersBrowser.execute_workflow_session(
+                workflow_func=workflow_func,
+                selectors_path=selectors_path,
+                headless=args.headless,
+                workflow_params=workflow_params
+            )
+        else:
+            logger.info("業務操作をスキップします")
         
-        try:
-            # コマンドライン引数からheadlessモードを決定
-            headless = args.headless if args.headless else None  # Noneの場合はsettings.iniから設定を読み込む
-            
-            # PORTERSへのログイン
-            success, browser, login = PortersBrowser.login_to_porters(
-                selectors_path=selectors_path, 
-                headless=headless
-            )
-            
-            if success:
-                logger.info("ログイン処理が完了しました")
-                
-                # 業務操作の実行（スキップオプションが指定されていない場合）
-                if not args.skip_operations and browser:
-                    logger.info("業務操作を開始します")
-                    operations = PortersOperations(browser)
-                    
-                    # 処理フローの選択
-                    if args.process == 'candidates':
-                        # 求職者一覧の処理フロー
-                        logger.info("求職者一覧のエクスポート処理フローを実行します")
-                        if not operations.execute_operations_flow():
-                            logger.error("求職者一覧のエクスポート処理フローに失敗しました")
-                            porters_success = False
-                        else:
-                            logger.info("求職者一覧のエクスポート処理フローが正常に完了しました")
-                            porters_success = True
-                    elif args.process == 'entryprocess':
-                        # 選考プロセスの処理フロー
-                        logger.info("選考プロセス一覧の表示処理フローを実行します")
-                        if not operations.access_selection_processes():
-                            logger.error("選考プロセス一覧の表示処理フローに失敗しました")
-                            porters_success = False
-                        else:
-                            logger.info("選考プロセス一覧の表示処理フローが正常に完了しました")
-                            porters_success = True
-                    elif args.process == 'both':
-                        # 両方の処理フローを順に実行
-                        logger.info("=== 両方の処理フローを順に実行します ===")
-                        
-                        # 求職者一覧の処理フロー
-                        logger.info("1. 求職者一覧のエクスポート処理フローを実行します")
-                        candidates_success = operations.execute_operations_flow()
-                        if not candidates_success:
-                            logger.error("求職者一覧のエクスポート処理フローに失敗しました")
-                        else:
-                            logger.info("求職者一覧のエクスポート処理フローが正常に完了しました")
-                        
-                        # 処理間の待機時間
-                        logger.info("次の処理に進む前に10秒間待機します")
-                        time.sleep(10)
-                        
-                        # 選考プロセスの処理フロー
-                        logger.info("2. 選考プロセス一覧の表示処理フローを実行します")
-                        entryprocess_success = operations.access_selection_processes()
-                        if not entryprocess_success:
-                            logger.error("選考プロセス一覧の表示処理フローに失敗しました")
-                        else:
-                            logger.info("選考プロセス一覧の表示処理フローが正常に完了しました")
-                        
-                        # 両方の処理結果をログに出力
-                        if candidates_success and entryprocess_success:
-                            logger.info("✅ 両方の処理フローが正常に完了しました")
-                            porters_success = True
-                        else:
-                            logger.warning("⚠️ 一部の処理フローが失敗しました")
-                            porters_success = False
-                    elif args.process == 'sequential':
-                        # 求職者一覧処理後に選考プロセスも実行
-                        logger.info("=== 求職者一覧処理後に選考プロセスも実行します ===")
-                        
-                        # PortersOperationsクラスの新しいメソッドを使用
-                        candidates_success, entryprocess_success = operations.execute_both_processes()
-                        
-                        # 両方の処理結果をログに出力
-                        if candidates_success and entryprocess_success:
-                            logger.info("✅ 両方の処理フローが正常に完了しました")
-                            porters_success = True
-                        else:
-                            logger.warning("⚠️ 一部の処理フローが失敗しました")
-                            porters_success = False
-                    
-                    # 操作完了後の待機時間
-                    logger.info("操作完了後、5秒間待機します")
-                    time.sleep(5)
-                
-                    # ログアウト処理
-                    if login:
-                        logger.info("ログアウト処理を開始します")
-                        try:
-                            logout_result = login.logout()
-                            if logout_result:
-                                logger.info("ログアウト処理が正常に完了しました")
-                            else:
-                                logger.warning("ログアウト処理に失敗しました")
-                        except Exception as e:
-                            logger.error(f"ログアウト処理中に例外が発生しました: {str(e)}")
-                
-                # 集計処理の実行（オプションが指定されている場合）
-                if args.aggregate != 'none':
-                    logger.info("=== スプレッドシート集計処理を開始します ===")
-                    aggregator = SpreadsheetAggregator()
-                    
-                    # 集計処理を実行
-                    users_success, entryprocess_success = aggregator.run_aggregation(args.aggregate)
-                    
-                    # 結果の集計
-                    success_count = 0
-                    total_count = 0
-                    
-                    if args.aggregate in ['users', 'both']:
-                        total_count += 1
-                        if users_success:
-                            success_count += 1
-                            logger.info("✅ 求職者フェーズ別集計処理が正常に完了しました")
-                        else:
-                            logger.error("❌ 求職者フェーズ別集計処理に失敗しました")
-                    
-                    if args.aggregate in ['entryprocess', 'both']:
-                        total_count += 1
-                        if entryprocess_success:
-                            success_count += 1
-                            logger.info("✅ 選考プロセス集計処理が正常に完了しました")
-                        else:
-                            logger.error("❌ 選考プロセス集計処理に失敗しました")
-                    
-                    # 集計処理の結果ステータス
-                    if success_count == total_count:
-                        logger.info("✅ すべての集計処理が正常に完了しました")
-                    else:
-                        logger.warning(f"⚠️ 実行された {total_count} 件の集計処理のうち、{success_count} 件が成功し、{total_count - success_count} 件が失敗しました")
-                
-                logger.info("================================================================================")
-                logger.info("PORTERSシステムログインツールを正常に終了します")
-                logger.info("================================================================================")
-                return 0
-            else:
-                logger.error("ログイン処理に失敗しました")
-                logger.info("================================================================================")
-                logger.info("PORTERSシステムログインツールを異常終了します")
-                logger.info("================================================================================")
-                return 1
-                
-        except Exception as e:
-            error_message = "処理中に例外が発生しました"
-            logger.error(f"{error_message}: {str(e)}")
-            import traceback
-            trace = traceback.format_exc()
-            logger.error(trace)
-            
-            # Slack通知を送信
-            slack.send_error(
-                error_message=error_message,
-                exception=e,
-                title="PORTERSシステム処理エラー",
-                context={
-                    "処理フロー": args.process,
-                    "集計処理": args.aggregate,
-                    "実行環境": args.env,
-                    "traceback": trace[:1000] + ("..." if len(trace) > 1000 else "")
-                }
-            )
-            
+        # 集計処理の実行（オプションが指定されている場合）
+        if args.aggregate != 'none':
+            aggregate_success, _ = run_aggregation(args.aggregate)
+            success = success and aggregate_success
+        
+        # 終了処理
+        if success:
+            logger.info("================================================================================")
+            logger.info("PORTERSシステムログインツールを正常に終了します")
+            logger.info("================================================================================")
+            return 0
+        else:
+            logger.error("一部の処理に失敗しました")
             logger.info("================================================================================")
             logger.info("PORTERSシステムログインツールを異常終了します")
             logger.info("================================================================================")
             return 1
-            
-        finally:
-            # 必ずブラウザを終了する
-            if browser:
-                logger.info("ブラウザを終了します")
-                try:
-                    # エラーフラグが立っている場合はエラーメッセージを含めて終了
-                    if not porters_success:
-                        browser.quit(
-                            error_message="処理が正常に完了しませんでした", 
-                            context={
-                                "処理フロー": args.process, 
-                                "集計処理": args.aggregate, 
-                                "実行環境": args.env
-                            }
-                        )
-                    else:
-                        browser.quit()
-                    logger.info("ブラウザを正常に終了しました")
-                except Exception as e:
-                    logger.error(f"ブラウザの終了中に例外が発生しました: {str(e)}")
-            
+                
     except Exception as e:
         error_message = "予期しないエラーが発生しました"
         logger.error(f"{error_message}: {str(e)}")
@@ -321,6 +330,9 @@ def main():
             exception=e,
             title="PORTERSシステム予期しないエラー",
             context={
+                "実行環境": args.env if 'args' in locals() else "不明",
+                "処理フロー": args.process if 'args' in locals() else "不明",
+                "集計処理": args.aggregate if 'args' in locals() else "不明",
                 "traceback": trace[:1000] + ("..." if len(trace) > 1000 else "")
             }
         )

@@ -56,7 +56,7 @@ class PortersOperations:
             logger.info("=== 「その他業務」ボタンのクリック処理を開始します ===")
             
             # 現在のウィンドウハンドルを保存
-            current_handles = self.browser.driver.window_handles
+            current_handles = self.browser.get_window_handles()
             logger.info(f"現在のウィンドウハンドル: {current_handles}")
             
             # 「その他業務」ボタンをクリック
@@ -70,7 +70,7 @@ class PortersOperations:
                 return False
             
             # 新しいウィンドウでのページ状態を確認
-            new_window_html = self.browser.driver.page_source
+            new_window_html = self.browser.get_page_source()
             html_path = os.path.join(self.screenshot_dir, "new_window.html")
             with open(html_path, "w", encoding="utf-8") as f:
                 f.write(new_window_html)
@@ -133,37 +133,41 @@ class PortersOperations:
                 try:
                     logger.info("直接CSSセレクタを使用して「すべての求職者」リンクを探索します")
                     all_candidates_selector = "#ui-id-189 > li:nth-child(7) > a"
-                    all_candidates_element = WebDriverWait(self.browser.driver, 10).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, all_candidates_selector))
+                    all_candidates_element = self.browser.wait_for_element(
+                        By.CSS_SELECTOR, 
+                        all_candidates_selector,
+                        condition=EC.element_to_be_clickable
                     )
-                    all_candidates_element.click()
-                    logger.info("✓ 直接CSSセレクタを使用して「すべての求職者」リンクをクリックしました")
+                    
+                    if all_candidates_element:
+                        self.browser.click_element_direct(all_candidates_element)
+                        logger.info("✓ 直接CSSセレクタを使用して「すべての求職者」リンクをクリックしました")
+                    else:
+                        logger.error("直接CSSセレクタを使用しても「すべての求職者」リンクが見つかりませんでした")
+                        
+                        # テキストで要素を探す最終手段
+                        try:
+                            logger.info("テキスト内容で「すべての求職者」リンクを探索します")
+                            links = self.browser.find_elements_by_tag("a", "すべての求職者")
+                            if links:
+                                self.browser.click_element_direct(links[0])
+                                logger.info("✓ テキスト内容で「すべての求職者」リンクをクリックしました")
+                            else:
+                                logger.error("「すべての求職者」テキストを含むリンクが見つかりませんでした")
+                                return False
+                        except Exception as text_e:
+                            logger.error(f"テキスト内容での探索にも失敗しました: {str(text_e)}")
+                            return False
                 except Exception as css_e:
                     logger.error(f"直接CSSセレクタを使用したクリックにも失敗しました: {str(css_e)}")
-                    
-                    # テキストで要素を探す最終手段
-                    try:
-                        logger.info("テキスト内容で「すべての求職者」リンクを探索します")
-                        links = self.browser.driver.find_elements(By.TAG_NAME, "a")
-                        for link in links:
-                            if "すべての求職者" in link.text:
-                                logger.info(f"「すべての求職者」テキストを含むリンクを発見しました: {link.text}")
-                                link.click()
-                                logger.info("✓ テキスト内容で「すべての求職者」リンクをクリックしました")
-                                break
-                        else:
-                            logger.error("「すべての求職者」テキストを含むリンクが見つかりませんでした")
-                            return False
-                    except Exception as text_e:
-                        logger.error(f"テキスト内容での探索にも失敗しました: {str(text_e)}")
-                        return False
+                    return False
             
             # 処理待機
             time.sleep(3)
             self.browser.save_screenshot("after_all_candidates_click.png")
             
             # ページ内容を確認
-            page_html = self.browser.driver.page_source
+            page_html = self.browser.get_page_source()
             page_analysis = self.browser.analyze_page_content(page_html)
             logger.info(f"ページタイトル: {page_analysis['page_title']}")
             
@@ -199,10 +203,13 @@ class PortersOperations:
                 try:
                     logger.info("直接CSSセレクタを使用して「全てチェック」チェックボックスを探索します")
                     checkbox_selector = "#recordListView input[type='checkbox']"
-                    checkbox_element = WebDriverWait(self.browser.driver, 10).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, checkbox_selector))
+                    checkbox_element = self.browser.wait_for_element(
+                        By.CSS_SELECTOR, 
+                        checkbox_selector,
+                        condition=EC.element_to_be_clickable,
+                        timeout=10
                     )
-                    checkbox_element.click()
+                    self.browser.click_element_direct(checkbox_element)
                     logger.info("✓ 直接CSSセレクタを使用して「全てチェック」チェックボックスをクリックしました")
                 except Exception as css_e:
                     logger.error(f"直接CSSセレクタを使用したクリックにも失敗しました: {str(css_e)}")
@@ -211,10 +218,13 @@ class PortersOperations:
                     try:
                         logger.info("より具体的なセレクタを使用して「全てチェック」チェックボックスを探索します")
                         specific_selector = "#recordListView > div.jss37 > div:nth-child(2) > div > div.jss45 > span > span > input"
-                        specific_element = WebDriverWait(self.browser.driver, 10).until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, specific_selector))
+                        specific_element = self.browser.wait_for_element(
+                            By.CSS_SELECTOR, 
+                            specific_selector,
+                            condition=EC.element_to_be_clickable,
+                            timeout=10
                         )
-                        specific_element.click()
+                        self.browser.click_element_direct(specific_element)
                         logger.info("✓ より具体的なセレクタを使用して「全てチェック」チェックボックスをクリックしました")
                     except Exception as specific_e:
                         logger.error(f"より具体的なセレクタを使用したクリックにも失敗しました: {str(specific_e)}")
@@ -426,7 +436,7 @@ class PortersOperations:
             if not self.browser.click_element('candidates_list', 'action_button'):
                 logger.error("アクションリストボタンのクリックに失敗しました")
                 
-                # 直接CSSセレクタを使用して再試行
+                # 直接CSSセレクタを使用してアクションボタンを探索します
                 try:
                     logger.info("直接CSSセレクタを使用してアクションボタンを探索します")
                     action_button_selector = "#recordListView > div.jss37 > div:nth-child(2) > div > button > div"
@@ -499,28 +509,36 @@ class PortersOperations:
                 button_name = f'next_button_{i+1}'
                 # セレクタによる検索はスキップし、直接テキストで探す
                 logger.info(f"テキストで{i+1}回目の「次へ」ボタンを探索します")
-                buttons = self.browser.driver.find_elements(By.TAG_NAME, "span")
+                
+                # 「次へ」というテキストを含むspanタグを探す
+                buttons = self.browser.find_elements(By.TAG_NAME, "span")
                 next_button_found = False
                 
                 for button in buttons:
-                    if "次へ" in button.text:
-                        logger.info(f"「次へ」テキストを含むボタンを発見しました: {button.text}")
-                        button.click()
-                        logger.info(f"✓ テキストで{i+1}回目の「次へ」ボタンをクリックしました")
-                        next_button_found = True
-                        break
+                    try:
+                        if "次へ" in button.text:
+                            logger.info(f"「次へ」テキストを含むボタンを発見しました: {button.text}")
+                            button.click()
+                            logger.info(f"✓ テキストで{i+1}回目の「次へ」ボタンをクリックしました")
+                            next_button_found = True
+                            break
+                    except:
+                        continue
                 
                 if not next_button_found:
                     # 最後のボタンは「実行」の可能性がある
                     if i == 2:
                         logger.info("最後のボタンは「実行」の可能性があるため、「実行」ボタンを探索します")
                         for button in buttons:
-                            if "実行" in button.text:
-                                logger.info(f"「実行」テキストを含むボタンを発見しました: {button.text}")
-                                button.click()
-                                logger.info("✓ テキストで「実行」ボタンをクリックしました")
-                                next_button_found = True
-                                break
+                            try:
+                                if "実行" in button.text:
+                                    logger.info(f"「実行」テキストを含むボタンを発見しました: {button.text}")
+                                    button.click()
+                                    logger.info("✓ テキストで「実行」ボタンをクリックしました")
+                                    next_button_found = True
+                                    break
+                            except:
+                                continue
                     
                     if not next_button_found:
                         logger.error(f"{i+1}回目の「次へ」または「実行」ボタンが見つかりませんでした")
@@ -534,24 +552,30 @@ class PortersOperations:
             execute_button_found = False
             
             for button in buttons:
-                if "実行" in button.text:
-                    logger.info(f"「実行」テキストを含むボタンを発見しました: {button.text}")
-                    button.click()
-                    logger.info("✓ テキストで「実行」ボタンをクリックしました")
-                    execute_button_found = True
-                    break
+                try:
+                    if "実行" in button.text:
+                        logger.info(f"「実行」テキストを含むボタンを発見しました: {button.text}")
+                        button.click()
+                        logger.info("✓ テキストで「実行」ボタンをクリックしました")
+                        execute_button_found = True
+                        break
+                except:
+                    continue
             
             if not execute_button_found:
                 # 「設定を保存」ボタンが表示されている可能性がある
                 for button in buttons:
-                    if "設定を保存" in button.text:
-                        logger.info(f"「設定を保存」テキストを含むボタンを発見しました: {button.text}")
-                        logger.warning("「設定を保存」ボタンではなく「実行」ボタンを探しています")
+                    try:
+                        if "設定を保存" in button.text:
+                            logger.info(f"「設定を保存」テキストを含むボタンを発見しました: {button.text}")
+                            logger.warning("「設定を保存」ボタンではなく「実行」ボタンを探しています")
+                            continue
+                        
+                        # ボタンのテキストをログに出力して確認
+                        if button.text.strip():
+                            logger.info(f"ボタンテキスト: '{button.text}'")
+                    except:
                         continue
-                    
-                    # ボタンのテキストをログに出力して確認
-                    if button.text.strip():
-                        logger.info(f"ボタンテキスト: '{button.text}'")
                 
                 # 親要素を探索してボタンを見つける
                 try:
@@ -560,17 +584,23 @@ class PortersOperations:
                     if button_panes:
                         logger.info(f"{len(button_panes)}個のボタンペインを発見しました")
                         for pane in button_panes:
-                            buttons = pane.find_elements(By.TAG_NAME, "button")
-                            logger.info(f"ペイン内に{len(buttons)}個のボタンを発見しました")
-                            
-                            # 最後のボタンが「実行」ボタンの可能性が高い
-                            if buttons:
-                                last_button = buttons[-1]
-                                logger.info(f"最後のボタンをクリックします: '{last_button.text}'")
-                                last_button.click()
-                                logger.info("✓ 最後のボタンをクリックしました")
-                                execute_button_found = True
-                                break
+                            buttons = []
+                            try:
+                                buttons = pane.find_elements(By.TAG_NAME, "button")
+                                logger.info(f"ペイン内に{len(buttons)}個のボタンを発見しました")
+                                
+                                # 最後のボタンが「実行」ボタンの可能性が高い
+                                if buttons:
+                                    last_button = buttons[-1]
+                                    button_text = last_button.text if hasattr(last_button, 'text') else ""
+                                    logger.info(f"最後のボタンをクリックします: '{button_text}'")
+                                    last_button.click()
+                                    logger.info("✓ 最後のボタンをクリックしました")
+                                    execute_button_found = True
+                                    break
+                            except Exception as btn_e:
+                                logger.warning(f"ボタン探索中にエラーが発生しました: {str(btn_e)}")
+                                continue
                 except Exception as e:
                     logger.warning(f"ダイアログのボタンペイン探索中にエラーが発生しました: {str(e)}")
             
@@ -588,24 +618,30 @@ class PortersOperations:
             # まずspanタグ内のテキストで探す
             buttons = self.browser.driver.find_elements(By.TAG_NAME, "span")
             for button in buttons:
-                if button.text.strip().upper() == "OK":
-                    logger.info(f"「OK」テキストを含むspanを発見しました: {button.text}")
-                    button.click()
-                    logger.info("✓ テキストで「OK」ボタンをクリックしました")
-                    ok_button_found = True
-                    break
+                try:
+                    if button.text.strip().upper() == "OK":
+                        logger.info(f"「OK」テキストを含むspanを発見しました: {button.text}")
+                        button.click()
+                        logger.info("✓ テキストで「OK」ボタンをクリックしました")
+                        ok_button_found = True
+                        break
+                except:
+                    continue
             
             # spanで見つからない場合はbuttonタグで探す
             if not ok_button_found:
                 logger.info("buttonタグで「OK」ボタンを探索します")
                 buttons = self.browser.driver.find_elements(By.TAG_NAME, "button")
                 for button in buttons:
-                    if button.text.strip().upper() == "OK":
-                        logger.info(f"「OK」テキストを含むbuttonを発見しました: {button.text}")
-                        button.click()
-                        logger.info("✓ buttonタグで「OK」ボタンをクリックしました")
-                        ok_button_found = True
-                        break
+                    try:
+                        if button.text.strip().upper() == "OK":
+                            logger.info(f"「OK」テキストを含むbuttonを発見しました: {button.text}")
+                            button.click()
+                            logger.info("✓ buttonタグで「OK」ボタンをクリックしました")
+                            ok_button_found = True
+                            break
+                    except:
+                        continue
             
             # ダイアログのボタンを探す
             if not ok_button_found:
@@ -617,7 +653,11 @@ class PortersOperations:
                         logger.info(f"{len(dialog_buttons)}個のダイアログボタンを発見しました")
                         # ボタンのテキストをログに出力
                         for i, btn in enumerate(dialog_buttons):
-                            logger.info(f"ダイアログボタン {i+1}: テキスト='{btn.text}'")
+                            try:
+                                button_text = btn.text.strip() if hasattr(btn, 'text') else ""
+                                logger.info(f"ダイアログボタン {i+1}: テキスト='{button_text}'")
+                            except:
+                                continue
                         
                         # 通常OKボタンは1つだけ
                         dialog_buttons[0].click()
@@ -710,14 +750,18 @@ class PortersOperations:
                 # テキストで見つからない場合はタイトル属性で探す
                 if not export_result_button_found:
                     logger.info("タイトル属性で「エクスポートの結果一覧を開く」ボタンを探索します")
+                    elements = self.browser.driver.find_elements(By.TAG_NAME, "li")
                     for element in elements:
-                        title = element.get_attribute("title")
-                        if title and "エクスポートの結果一覧を開く" in title:
-                            logger.info(f"「エクスポートの結果一覧を開く」タイトルを持つ要素を発見しました")
-                            element.click()
-                            logger.info("✓ タイトル属性で「エクスポートの結果一覧を開く」ボタンをクリックしました")
-                            export_result_button_found = True
-                            break
+                        try:
+                            title = element.get_attribute("title")
+                            if title and "エクスポートの結果一覧を開く" in title:
+                                logger.info(f"「エクスポートの結果一覧を開く」タイトルを持つ要素を発見しました")
+                                element.click()
+                                logger.info("✓ タイトル属性で「エクスポートの結果一覧を開く」ボタンをクリックしました")
+                                export_result_button_found = True
+                                break
+                        except:
+                            continue
                 
                 # タイトル属性でも見つからない場合はクラス名で探す
                 if not export_result_button_found:
@@ -747,8 +791,9 @@ class PortersOperations:
                     logger.info(f"{retry_interval}秒後にリトライします")
                     time.sleep(retry_interval)
                 else:
-                    logger.error("エクスポート結果リストを開くことができませんでした")
+                    logger.error("エクスポート結果リストを開くのを諦めます")
                     return None
+    
         
         # CSVダウンロードリンクをクリック
         for attempt in range(max_retries):
@@ -1566,8 +1611,7 @@ class PortersOperations:
                         show_more_button_found = True
                         
                         # 要素が画面内に表示されるようにスクロール
-                        self.browser.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", show_more_button)
-                        time.sleep(1)  # スクロール完了を待機
+                        self.browser.scroll_to_element(show_more_button)
                         
                         # クリック実行
                         show_more_button.click()
@@ -2116,17 +2160,23 @@ class PortersOperations:
                         if button_panes:
                             logger.info(f"{len(button_panes)}個のボタンペインを発見しました")
                             for pane in button_panes:
-                                buttons = pane.find_elements(By.TAG_NAME, "button")
-                                logger.info(f"ペイン内に{len(buttons)}個のボタンを発見しました")
-                                
-                                # 最後のボタンが「実行」ボタンの可能性が高い
-                                if buttons:
-                                    last_button = buttons[-1]
-                                    logger.info(f"最後のボタンをクリックします: '{last_button.text}'")
-                                    last_button.click()
-                                    logger.info("✓ 最後のボタンをクリックしました")
-                                    execute_button_found = True
-                                    break
+                                buttons = []
+                                try:
+                                    buttons = pane.find_elements(By.TAG_NAME, "button")
+                                    logger.info(f"ペイン内に{len(buttons)}個のボタンを発見しました")
+                                    
+                                    # 最後のボタンが「実行」ボタンの可能性が高い
+                                    if buttons:
+                                        last_button = buttons[-1]
+                                        button_text = last_button.text if hasattr(last_button, 'text') else ""
+                                        logger.info(f"最後のボタンをクリックします: '{button_text}'")
+                                        last_button.click()
+                                        logger.info("✓ 最後のボタンをクリックしました")
+                                        execute_button_found = True
+                                        break
+                                except Exception as btn_e:
+                                    logger.warning(f"ボタン探索中にエラーが発生しました: {str(btn_e)}")
+                                    continue
                     except Exception as e:
                         logger.warning(f"ダイアログのボタンペイン探索中にエラーが発生しました: {str(e)}")
                 
@@ -2143,24 +2193,30 @@ class PortersOperations:
                 # まずspanタグ内のテキストで探す
                 buttons = self.browser.driver.find_elements(By.TAG_NAME, "span")
                 for button in buttons:
-                    if button.text.strip().upper() == "OK":
-                        logger.info(f"「OK」テキストを含むspanを発見しました: {button.text}")
-                        button.click()
-                        logger.info("✓ テキストで「OK」ボタンをクリックしました")
-                        ok_button_found = True
-                        break
+                    try:
+                        if button.text.strip().upper() == "OK":
+                            logger.info(f"「OK」テキストを含むspanを発見しました: {button.text}")
+                            button.click()
+                            logger.info("✓ テキストで「OK」ボタンをクリックしました")
+                            ok_button_found = True
+                            break
+                    except:
+                        continue
                 
                 # spanで見つからない場合はbuttonタグで探す
                 if not ok_button_found:
                     logger.info("buttonタグで「OK」ボタンを探索します")
                     buttons = self.browser.driver.find_elements(By.TAG_NAME, "button")
                     for button in buttons:
-                        if button.text.strip().upper() == "OK":
-                            logger.info(f"「OK」テキストを含むbuttonを発見しました: {button.text}")
-                            button.click()
-                            logger.info("✓ buttonタグで「OK」ボタンをクリックしました")
-                            ok_button_found = True
-                            break
+                        try:
+                            if button.text.strip().upper() == "OK":
+                                logger.info(f"「OK」テキストを含むbuttonを発見しました: {button.text}")
+                                button.click()
+                                logger.info("✓ buttonタグで「OK」ボタンをクリックしました")
+                                ok_button_found = True
+                                break
+                        except:
+                            continue
                 
                 # ダイアログのボタンを探す
                 if not ok_button_found:
@@ -2172,7 +2228,11 @@ class PortersOperations:
                             logger.info(f"{len(dialog_buttons)}個のダイアログボタンを発見しました")
                             # ボタンのテキストをログに出力
                             for i, btn in enumerate(dialog_buttons):
-                                logger.info(f"ダイアログボタン {i+1}: テキスト='{btn.text}'")
+                                try:
+                                    button_text = btn.text.strip() if hasattr(btn, 'text') else ""
+                                    logger.info(f"ダイアログボタン {i+1}: テキスト='{button_text}'")
+                                except:
+                                    continue
                             
                             # 通常OKボタンは1つだけ
                             dialog_buttons[0].click()
