@@ -30,53 +30,6 @@ class PortersLogin:
         self.browser = browser
         self.screenshot_dir = browser.screenshot_dir
     
-    @classmethod
-    def login_to_porters(cls, selectors_path=None, headless=False):
-        """
-        PORTERSシステムへのログイン処理を実行する
-        
-        Args:
-            selectors_path (str): セレクタ情報を含むCSVファイルのパス
-            headless (bool): ヘッドレスモードで実行するかどうか
-        
-        Returns:
-            tuple: (success, browser, login) 処理成功の場合はTrue、失敗の場合はFalse、およびブラウザとログインオブジェクト
-        """
-        from src.modules.porters.browser import PortersBrowser
-        
-        try:
-            logger.info("=== PORTERSシステムへのログイン処理を開始します ===")
-            
-            # ブラウザセットアップ
-            browser = PortersBrowser(selectors_path=selectors_path, headless=headless)
-            
-            # WebDriverのセットアップ
-            if not browser.setup():
-                logger.error("ブラウザのセットアップに失敗しました")
-                return False, None, None
-            
-            # ログイン処理
-            login = cls(browser)
-            if not login.execute():
-                logger.error("ログイン処理に失敗しました")
-                browser.quit()
-                return False, None, None
-            
-            # ログイン成功後の検証
-            logger.info("ログイン後の画面を検証します")
-            browser.save_screenshot("login_success_verification.png")
-            
-            logger.info("✅ PORTERSシステムへのログイン処理が正常に完了しました")
-            return True, browser, login
-            
-        except Exception as e:
-            logger.error(f"PORTERSシステムへのログイン処理中にエラーが発生しました: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            if 'browser' in locals() and browser:
-                browser.quit()
-            return False, None, None
-    
     def execute(self):
         """
         ログイン処理を実行する

@@ -1,6 +1,7 @@
 import os
 import csv
 import time
+import configparser
 from pathlib import Path
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -13,6 +14,7 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 from src.utils.logging_config import get_logger
+from src.utils.environment import EnvironmentUtils as env
 
 logger = get_logger(__name__)
 
@@ -22,22 +24,29 @@ class PortersBrowser:
     
     このクラスは、Seleniumを使用したブラウザ操作の基本機能を提供します。
     WebDriverの初期化、セレクタの読み込み、要素の取得、スクリーンショットの保存などの
-    汎用的なブラウザ操作機能を担当します。
+    汎用的なブラウザ操作機能を担当します。また、設定ファイル（settings.ini）から
+    ブラウザ関連の設定を読み込む機能も提供します。
     """
     
-    def __init__(self, selectors_path=None, headless=False, timeout=10):
+    def __init__(self, selectors_path=None, headless=None, timeout=10):
         """
         ブラウザ操作クラスの初期化
         
         Args:
             selectors_path (str): セレクタ情報を含むCSVファイルのパス
-            headless (bool): ヘッドレスモードで実行するかどうか
+            headless (bool): ヘッドレスモードで実行するかどうか（Noneの場合はsettings.iniから読み込む）
             timeout (int): 要素を待機する最大時間（秒）
         """
         self.driver = None
         self.wait = None
         self.timeout = timeout
-        self.headless = headless
+        
+        # settings.iniからheadlessモードの設定を読み込む（引数で指定がなければ）
+        if headless is None:
+            self.headless = self._get_headless_setting()
+        else:
+            self.headless = headless
+            
         self.selectors_path = selectors_path
         self.selectors = {}
         
@@ -52,6 +61,64 @@ class PortersBrowser:
             
         # セレクタのフォールバック設定
         self._setup_fallback_selectors()
+    
+    def _get_headless_setting(self):
+        """
+        settings.iniファイルからheadlessモードの設定を読み込む
+        
+        Returns:
+            bool: headlessモードが有効な場合はTrue、無効な場合はFalse
+        """
+        try:
+            # 環境変数からAPP_ENVを取得
+            app_env = env.get_environment()
+            
+            # BROWSER セクションからheadless設定を読み込む
+            headless = env.get_config_value("BROWSER", "headless", default="false")
+            
+            # 文字列をブール値に変換
+            if isinstance(headless, str):
+                return headless.lower() == "true"
+            return bool(headless)
+            
+        except Exception as e:
+            logger.warning(f"settings.iniからheadless設定を読み込めませんでした: {str(e)}")
+            return False
+            
+    def _update_headless_setting(self, headless_value):
+        """
+        settings.iniファイルのheadless設定を更新する
+        
+        Args:
+            headless_value (bool): 新しいheadless設定値
+            
+        Returns:
+            bool: 更新が成功した場合はTrue、失敗した場合はFalse
+        """
+        try:
+            config_path = env.get_config_file()
+            config = configparser.ConfigParser()
+            
+            # 設定ファイルを読み込む
+            config.read(config_path, encoding='utf-8')
+            
+            # BROWSERセクションがなければ作成
+            if not config.has_section("BROWSER"):
+                config.add_section("BROWSER")
+            
+            # headless設定を更新
+            config.set("BROWSER", "headless", str(headless_value).lower())
+            
+            # 設定を保存
+            with open(config_path, 'w', encoding='utf-8') as configfile:
+                config.write(configfile)
+                
+            logger.info(f"headless設定を更新しました: {headless_value}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"headless設定の更新に失敗しました: {str(e)}")
+            return False
     
     def _setup_fallback_selectors(self):
         """セレクタのフォールバック設定"""
@@ -116,7 +183,10 @@ class PortersBrowser:
             # Chromeオプションの設定
             chrome_options = Options()
             if self.headless:
+                logger.info("ヘッドレスモードで実行します")
                 chrome_options.add_argument("--headless")
+            else:
+                logger.info("ブラウザ表示モードで実行します")
             
             chrome_options.add_argument("--window-size=1920,1080")
             chrome_options.add_argument("--disable-gpu")
@@ -446,4 +516,78 @@ class PortersBrowser:
             except Exception as e:
                 logger.error(f"WebDriverの終了中にエラーが発生しました: {str(e)}")
                 return False
-        return True 
+        return True
+        
+    @classmethod
+    def login_to_porters(cls, selectors_path=None, headless=None):
+        """
+        PORTERSシステムへのログイン処理を実行する
+        
+        Args:
+            selectors_path (str): セレクタ情報を含むCSVファイルのパス
+            headless (bool): ヘッドレスモードで実行するかどうか (Noneの場合はsettings.iniから読み込む)
+        
+        Returns:
+            tuple: (success, browser, login) 処理成功の場合はTrue、失敗の場合はFalse、およびブラウザとログインオブジェクト
+        """
+        from src.modules.porters.login import PortersLogin
+        
+        try:
+            logger.info("=== PORTERSシステムへのログイン処理を開始します ===")
+            
+            # ブラウザセットアップ
+            browser = cls(selectors_path=selectors_path, headless=headless)
+            
+            # WebDriverのセットアップ
+            if not browser.setup():
+                logger.error("ブラウザのセットアップに失敗しました")
+                return False, None, None
+            
+            # ログイン処理
+            login = PortersLogin(browser)
+            if not login.execute():
+                logger.error("ログイン処理に失敗しました")
+                browser.quit()
+                return False, None, None
+            
+            # ログイン成功後の検証
+            logger.info("ログイン後の画面を検証します")
+            browser.save_screenshot("login_success_verification.png")
+            
+            logger.info("✅ PORTERSシステムへのログイン処理が正常に完了しました")
+            return True, browser, login
+            
+        except Exception as e:
+            logger.error(f"PORTERSシステムへのログイン処理中にエラーが発生しました: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            if 'browser' in locals() and browser:
+                browser.quit()
+            return False, None, None
+    
+    def set_headless_mode(self, headless_mode):
+        """
+        ヘッドレスモード設定を変更し、settings.iniファイルも更新する
+        
+        Args:
+            headless_mode (bool): 新しいヘッドレスモード設定
+            
+        Returns:
+            bool: 設定変更が成功した場合はTrue、失敗した場合はFalse
+            
+        Note:
+            既に初期化済みのWebDriverには影響しません。
+            次回のWebDriver初期化時から有効になります。
+        """
+        try:
+            # 内部の設定を更新
+            self.headless = bool(headless_mode)
+            
+            # settings.iniファイルも更新
+            result = self._update_headless_setting(headless_mode)
+            
+            logger.info(f"ヘッドレスモード設定を {headless_mode} に変更しました")
+            return result
+        except Exception as e:
+            logger.error(f"ヘッドレスモード設定の変更中にエラーが発生しました: {str(e)}")
+            return False 

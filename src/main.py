@@ -22,7 +22,7 @@ sys.path.append(str(root_dir))
 
 from src.utils.environment import EnvironmentUtils as env
 from src.utils.logging_config import get_logger
-from src.modules.porters.login import PortersLogin
+from src.modules.porters.browser import PortersBrowser
 from src.modules.porters.operations import PortersOperations
 from src.modules.spreadsheet_aggregator import SpreadsheetAggregator
 
@@ -115,10 +115,13 @@ def main():
         porters_success = False
         
         try:
+            # コマンドライン引数からheadlessモードを決定
+            headless = args.headless if args.headless else None  # Noneの場合はsettings.iniから設定を読み込む
+            
             # PORTERSへのログイン
-            success, browser, login = PortersLogin.login_to_porters(
+            success, browser, login = PortersBrowser.login_to_porters(
                 selectors_path=selectors_path, 
-                headless=args.headless
+                headless=headless
             )
             
             if success:
