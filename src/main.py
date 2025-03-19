@@ -27,15 +27,18 @@ from src.utils.slack_notifier import SlackNotifier
 
 logger = get_logger(__name__)
 
-# SlackNotifierのインスタンスを作成 (環境変数から設定を読み込む)
-slack = SlackNotifier()
+# SlackNotifierのグローバルインスタンス
+slack_notifier = None
 
 def setup_environment():
     """
     実行環境のセットアップを行う
     - 必要なディレクトリの作成
     - 設定ファイルの読み込み
+    - Slack通知の初期化
     """
+    global slack_notifier
+    
     # 必要なディレクトリの作成
     os.makedirs("logs", exist_ok=True)
     os.makedirs("data", exist_ok=True)
@@ -45,6 +48,10 @@ def setup_environment():
         # 環境変数の読み込み
         env.load_env()
         logger.info("環境変数を読み込みました")
+        
+        # 環境変数のロード後にSlackNotifierを初期化
+        slack_notifier = SlackNotifier()
+        
         return True
     except Exception as e:
         logger.error(f"設定ファイルの読み込みに失敗しました: {str(e)}")
@@ -243,104 +250,79 @@ def main():
     Returns:
         int: 処理が成功した場合は0、失敗した場合は1
     """
-    try:
-        logger.info("================================================================================")
-        logger.info("PORTERSシステムログインツールを開始します")
-        logger.info("================================================================================")
+    logger.info("=" * 70)
+    logger.info("PORTERSシステムログインツールを開始します")
+    logger.info("=" * 70)
+    
+    # コマンドライン引数の解析
+    args = parse_arguments()
+    
+    # 環境変数の設定
+    os.environ['APP_ENV'] = args.env
+    os.environ['LOG_LEVEL'] = args.log_level
+    
+    # 実行環境のセットアップ
+    if not setup_environment():
+        logger.error("環境のセットアップに失敗したため、処理を中止します")
+        sys.exit(1)
+    
+    logger.info(f"実行環境: {args.env}")
+    logger.info(f"ログレベル: {args.log_level}")
+    logger.info(f"処理フロー: {args.process}")
+    logger.info(f"集計処理: {args.aggregate}")
+    
+    # 設定ファイルのパス
+    selectors_path = os.path.join(root_dir, "config", "selectors.csv")
+    
+    # 処理成功フラグ
+    success = True
+    
+    # 業務操作のスキップフラグがOFFの場合、PORTERSへログインして処理実行
+    if not args.skip_operations:
+        # 処理フローの選択
+        workflow_func = None
+        if args.process == 'candidates':
+            workflow_func = candidates_workflow
+        elif args.process == 'entryprocess':
+            workflow_func = entryprocess_workflow
+        elif args.process == 'both':
+            workflow_func = both_workflow
+        elif args.process == 'sequential':
+            workflow_func = sequential_workflow
         
-        # コマンドライン引数の解析
-        args = parse_arguments()
+        # ワークフローパラメータの準備
+        workflow_params = {
+            'env': args.env,
+            'process': args.process
+        }
         
-        # 環境変数の設定
-        os.environ['APP_ENV'] = args.env
-        os.environ['LOG_LEVEL'] = args.log_level
-        logger.info(f"実行環境: {args.env}")
-        logger.info(f"ログレベル: {args.log_level}")
-        logger.info(f"処理フロー: {args.process}")
-        logger.info(f"集計処理: {args.aggregate}")
-        
-        # 環境設定
-        if not setup_environment():
-            logger.error("環境設定に失敗したため、処理を中止します")
-            return 1
-        
-        # 設定ファイルのパス
-        selectors_path = os.path.join(root_dir, "config", "selectors.csv")
-        
-        # 処理成功フラグ
-        success = True
-        
-        # 業務操作のスキップフラグがOFFの場合、PORTERSへログインして処理実行
-        if not args.skip_operations:
-            # 処理フローの選択
-            workflow_func = None
-            if args.process == 'candidates':
-                workflow_func = candidates_workflow
-            elif args.process == 'entryprocess':
-                workflow_func = entryprocess_workflow
-            elif args.process == 'both':
-                workflow_func = both_workflow
-            elif args.process == 'sequential':
-                workflow_func = sequential_workflow
-            
-            # ワークフローパラメータの準備
-            workflow_params = {
-                'env': args.env,
-                'process': args.process
-            }
-            
-            # ワークフローセッションの実行
-            success, workflow_results = PortersBrowser.execute_workflow_session(
-                workflow_func=workflow_func,
-                selectors_path=selectors_path,
-                headless=args.headless,
-                workflow_params=workflow_params
-            )
-        else:
-            logger.info("業務操作をスキップします")
-        
-        # 集計処理の実行（オプションが指定されている場合）
-        if args.aggregate != 'none':
-            aggregate_success, _ = run_aggregation(args.aggregate)
-            success = success and aggregate_success
-        
-        # 終了処理
-        if success:
-            logger.info("================================================================================")
-            logger.info("PORTERSシステムログインツールを正常に終了します")
-            logger.info("================================================================================")
-            return 0
-        else:
-            logger.error("一部の処理に失敗しました")
-            logger.info("================================================================================")
-            logger.info("PORTERSシステムログインツールを異常終了します")
-            logger.info("================================================================================")
-            return 1
-                
-    except Exception as e:
-        error_message = "予期しないエラーが発生しました"
-        logger.error(f"{error_message}: {str(e)}")
-        import traceback
-        trace = traceback.format_exc()
-        logger.error(trace)
-        
-        # Slack通知を送信
-        slack.send_error(
-            error_message=error_message,
-            exception=e,
-            title="PORTERSシステム予期しないエラー",
-            context={
-                "実行環境": args.env if 'args' in locals() else "不明",
-                "処理フロー": args.process if 'args' in locals() else "不明",
-                "集計処理": args.aggregate if 'args' in locals() else "不明",
-                "traceback": trace[:1000] + ("..." if len(trace) > 1000 else "")
-            }
+        # ワークフローセッションの実行
+        success, workflow_results = PortersBrowser.execute_workflow_session(
+            workflow_func=workflow_func,
+            selectors_path=selectors_path,
+            headless=args.headless,
+            workflow_params=workflow_params
         )
-        
+    else:
+        logger.info("業務操作をスキップします")
+    
+    # 集計処理の実行（オプションが指定されている場合）
+    if args.aggregate != 'none':
+        aggregate_success, _ = run_aggregation(args.aggregate)
+        success = success and aggregate_success
+    
+    # 終了処理
+    if success:
+        logger.info("================================================================================")
+        logger.info("PORTERSシステムログインツールを正常に終了します")
+        logger.info("================================================================================")
+        return 0
+    else:
+        logger.error("一部の処理に失敗しました")
         logger.info("================================================================================")
         logger.info("PORTERSシステムログインツールを異常終了します")
         logger.info("================================================================================")
         return 1
-
+                
 if __name__ == "__main__":
     sys.exit(main())

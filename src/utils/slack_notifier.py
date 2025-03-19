@@ -18,6 +18,7 @@ import socket
 from datetime import datetime
 
 from src.utils.logging_config import get_logger
+from src.utils.environment import EnvironmentUtils as env
 
 logger = get_logger(__name__)
 
@@ -33,8 +34,14 @@ class SlackNotifier:
         Args:
             webhook_url (Optional[str]): Slack Webhook URL。指定しない場合は環境変数から取得
         """
-        self.webhook_url = webhook_url or os.environ.get('SLACK_WEBHOOK')
+        self.webhook_url = webhook_url
         
+        if not self.webhook_url:
+            try:
+                self.webhook_url = env.get_env_var('SLACK_WEBHOOK', None)
+            except ValueError:
+                logger.warning("環境変数から'SLACK_WEBHOOK'を取得できませんでした")
+                
         if not self.webhook_url:
             logger.warning("Slack Webhook URLが設定されていません。Slack通知は無効です。")
     

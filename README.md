@@ -31,6 +31,9 @@ run_dev.bat --process sequential --aggregate both
 
 # ヘッドレスモード（ブラウザを表示せず）で実行
 run_dev.bat --headless
+
+# 集計処理のみを実行（データ取得をスキップ）
+run_dev.bat --skip-operations --aggregate users
 ```
 
 ### 本番環境用実行ファイル（run.bat）
@@ -56,14 +59,19 @@ python -m src.main --process sequential --aggregate both
 
 ### 集計処理指定 (--aggregate)
 - `none`: 集計処理を実行しない（デフォルト）
-- `users`: 求職者フェーズ別集計のみ実行
-- `entryprocess`: 選考プロセス集計のみ実行
+- `users`: 求職者フェーズ別集計を実行
+- `entryprocess`: 選考プロセス集計を実行
 - `both`: 両方の集計処理を実行
+
+注意: デフォルトでは、集計処理の前にデータ取得処理も実行されます。集計処理のみを実行するには、`--skip-operations` フラグを追加する必要があります。例：
+```
+python -m src.main --skip-operations --aggregate users
+```
 
 ### その他のオプション
 - `--headless`: ブラウザを表示せずにヘッドレスモードで実行
 - `--env [development|production]`: 実行環境の指定（設定ファイルの分岐用）
-- `--skip-operations`: ログイン処理のみを実行し、データ取得をスキップ
+- `--skip-operations`: ログイン処理とデータ取得をスキップし、集計処理のみを実行
 - `--log-level [DEBUG|INFO|WARNING|ERROR|CRITICAL]`: ログレベルの指定
 
 ## 集計処理について
@@ -76,6 +84,11 @@ python -m src.main --process sequential --aggregate both
 - 推薦済(仮エントリー)
 - 面談設定済
 - 終了
+
+また、登録経路ごとの内訳も集計されます：
+- LINE
+- 自社サイト(応募後架電)
+- 自社サイト(ダイレクトコミュニケーション)
 
 ### 選考プロセス集計
 選考プロセスデータを日付ごとにLIST_ENTRYPROCESSシートに記録します。
