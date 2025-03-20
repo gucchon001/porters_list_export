@@ -10,10 +10,66 @@ alwaysApply: false
 - セレクタが見つからない場合のフォールバック処理を実装する
 
 ## ブラウザ操作
-- ブラウザ操作は `PortersBrowser` クラスのメソッドを使用する
+- ブラウザ操作は `sBrowser` クラスのメソッドを使用する
 - 直接 WebDriver のメソッドを呼び出すのではなく、ラッパーメソッドを使用する
-- 要素のクリックは `click_element` メソッドを使用し、通常のクリックとJavaScriptクリックの両方を試みる
 - 新しいウィンドウへの切り替えは `switch_to_new_window` メソッドを使用する
+
+# 安定的な要素クリックのためのルール
+
+以下は、Selenium を使用して安定的に要素をクリックする際の推奨ルールです。これらの手順を統一したラッパーメソッド内に実装することで、通常のクリックが失敗した場合に自動的にフォールバック手段が発動し、動作の安定性が向上します。
+
+1. **明示的な待機の利用**  
+   - `WebDriverWait` を利用して、対象要素が存在しかつクリック可能な状態であることを確認します。  
+   - 例:  
+     ```python
+     from selenium.webdriver.support.ui import WebDriverWait
+     from selenium.webdriver.support import expected_conditions as EC
+     from selenium.webdriver.common.by import By
+
+     element = WebDriverWait(driver, timeout).until(
+         EC.element_to_be_clickable((By.CSS_SELECTOR, "your-selector"))
+     )
+     ```
+
+2. **スクロール処理の併用**  
+   - 要素が画面外にある場合、`driver.execute_script()` を利用して要素までスクロールさせ、表示状態にします。  
+   - 例:  
+     ```python
+     driver.execute_script("arguments[0].scrollIntoView(true);", element)
+     ```
+
+3. **通常のクリック操作**  
+   - 最初に、`element.click()` による通常のクリック処理を試みます。  
+   - この際、クリック前後の操作内容をログに記録し、必要であればスクリーンショットを取得します。  
+   - 例:  
+     ```python
+     try:
+         element.click()
+     except Exception as e:
+         logger.error(f"通常のクリック操作に失敗: {e}")
+         # フォールバックへ
+     ```
+
+4. **フォールバックとしてのJavaScriptクリック**  
+   - 通常のクリックで失敗（例: 要素が重なっている、もしくはクリック不可能と判断された場合など）した場合、`driver.execute_script("arguments[0].click();", element)` を実行してクリック操作を試みます。  
+   - 例:  
+     ```python
+     try:
+         driver.execute_script("arguments[0].click();", element)
+     except Exception as e:
+         logger.error(f"JavaScriptによるクリック操作に失敗: {e}")
+     ```
+
+5. **エラーの適切なハンドリング**  
+   - クリック操作で例外が発生した場合、詳細なエラーメッセージとともに、必要に応じスクリーンショットを取得し、エラー内容をロギングします。  
+   - 例:  
+     ```python
+     except Exception as e:
+         logger.error(f"クリック操作全般に失敗: {e}")
+         # スクリーンショットの取得処理を追加
+     ```
+
+これらの手順を組み合わせた統一メソッドを実装することで、Selenium のクリック操作がより安定的に動作し、さまざまな環境下での問題発生を低減できます。
 
 ## 待機戦略
 - 明示的な待機（WebDriverWait）を使用し、固定のsleep時間は最小限にする

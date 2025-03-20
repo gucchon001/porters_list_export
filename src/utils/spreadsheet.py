@@ -44,32 +44,12 @@ class SpreadsheetManager:
         self.spreadsheet_id = env.get_config_value('SPREADSHEET', 'SSID').strip('"\'')
         
         # 認証情報の設定
-        if credential_path is None:
+        if (credential_path is None):
             try:
-                # 環境変数から認証情報のパスを取得
-                # 環境変数が読み込まれていることを確認
                 env.load_env()
-                credential_filename = env.get_env_var('SERVICE_ACCOUNT_FILE', default=None)
-                
-                if credential_filename:
-                    # 相対パスを絶対パスに変換
-                    if not os.path.isabs(credential_filename):
-                        base_dir = env.get_project_root()
-                        credential_path = os.path.join(base_dir, credential_filename)
-                    else:
-                        credential_path = credential_filename
-                    
-                    logger.info(f"環境変数から認証情報のパスを取得しました: {credential_path}")
-                else:
-                    # 環境変数が見つからない場合はデフォルト値を使用
-                    base_dir = env.get_project_root()
-                    credential_path = os.path.join(base_dir, 'config', 'service_account.json')
-                    logger.warning(f"環境変数に認証情報のパスが設定されていないため、デフォルト値を使用します: {credential_path}")
             except Exception as e:
-                # エラー発生時はデフォルト値を使用
-                base_dir = env.get_project_root()
-                credential_path = os.path.join(base_dir, 'config', 'service_account.json')
-                logger.warning(f"認証情報のパス取得中にエラーが発生したため、デフォルト値を使用します: {str(e)}")
+                logger.warning(f"Failed to load environment: {e}")
+            credential_path = str(env.get_service_account_file())
         
         # 認証情報ファイルの存在確認
         if not os.path.exists(credential_path):
