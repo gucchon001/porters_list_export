@@ -8,7 +8,7 @@ google-auth-oauthlib==1.1.0
 anytree
 openai==1.55.3
 icecream
-gspread>=5.12.0
+gspread
 oauth2client
 selenium
 selenium>=4.16.0

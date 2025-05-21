@@ -24,6 +24,7 @@ from src.utils.logging_config import get_logger
 from src.utils.helpers import wait_for_new_csv_in_downloads, move_file_to_data_dir, find_latest_csv_in_downloads
 from src.utils.spreadsheet import SpreadsheetManager
 from src.utils.environment import EnvironmentUtils as env
+from src.modules.spreadsheet_aggregator import SpreadsheetAggregator
 
 logger = get_logger(__name__)
 
@@ -1069,33 +1070,21 @@ class PortersOperations:
             
             # スプレッドシートの集計処理を実行
             try:
-                logger.info("スプレッドシートの集計処理を実行します")
-                
-                # テストモジュールをインポート
-                spec = importlib.util.spec_from_file_location(
-                    "test_count_users", 
-                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 
-                                "tests", "test_count_users.py")
-                )
-                count_users_module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(count_users_module)
-                
-                # 集計処理を実行
-                test_count_users = count_users_module.TestCountUsers()
-                spreadsheet_manager = self.browser.spreadsheet_manager if hasattr(self.browser, 'spreadsheet_manager') else None
-                
-                if spreadsheet_manager is None:
-                    from src.utils.spreadsheet import SpreadsheetManager
-                    spreadsheet_manager = SpreadsheetManager()
-                    spreadsheet_manager.open_spreadsheet()
-                
-                result = test_count_users.count_users_by_phase(spreadsheet_manager)
-                if result:
-                    logger.info("スプレッドシートの集計処理が正常に完了しました")
+                logger.info("スプレッドシートの日別フェーズカウント集計処理を実行します")
+
+                aggregator = SpreadsheetAggregator()
+                if not aggregator.initialize():
+                    logger.error("SpreadsheetAggregatorの初期化に失敗しました。集計処理をスキップします。")
+                    result = False
                 else:
-                    logger.warning("スプレッドシートの集計処理に失敗しましたが、処理を継続します")
+                    result = aggregator.record_daily_phase_counts()
+
+                if result:
+                    logger.info("スプレッドシートの日別フェーズカウント集計処理が正常に完了しました")
+                else:
+                    logger.warning("スプレッドシートの日別フェーズカウント集計処理に失敗しましたが、ブラウザ操作は継続します")
             except Exception as e:
-                logger.error(f"スプレッドシートの集計処理中にエラーが発生しました: {str(e)}")
+                logger.error(f"スプレッドシートの日別フェーズカウント集計処理中に予期せぬエラーが発生しました: {str(e)}")
                 import traceback
                 logger.error(traceback.format_exc())
                 # 集計処理の失敗は全体の処理に影響を与えないようにする

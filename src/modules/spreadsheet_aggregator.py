@@ -12,7 +12,9 @@ import os
 import sys
 import datetime
 from pathlib import Path
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
+import copy
+import unicodedata # Unicode正規化のために追加
 
 # プロジェクトのルートディレクトリをPYTHONPATHに追加
 root_dir = Path(__file__).resolve().parent.parent.parent
@@ -23,6 +25,20 @@ from src.utils.environment import EnvironmentUtils as env
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+def _custom_col_to_a1(col: int) -> str:
+    """
+    1から始まる列番号をA1形式の列名に変換します。
+    例: 1 -> 'A', 27 -> 'AA'
+    """
+    if not isinstance(col, int) or col < 1:
+        raise ValueError("列番号は正の整数である必要があります")
+    
+    string = ""
+    while col > 0:
+        col, remainder = divmod(col - 1, 26)
+        string = chr(65 + remainder) + string
+    return string
 
 class SpreadsheetAggregator:
     """
@@ -43,6 +59,17 @@ class SpreadsheetAggregator:
             logger.debug("ErrorHandler初期化完了")
         except Exception as e:
             logger.warning(f"ErrorHandler初期化に失敗: {e}")
+        
+        self.phase_counts = {
+            "相談前×推薦前(新規エントリー)": 0,
+            "相談済×推薦前(open)": 0,
+            "推薦済(仮エントリー)": 0,
+            "面談設定済": 0,
+            "終了": 0,
+            # "エージェント前相談": 0, # この行をコメントアウトまたは削除
+            # "その他": 0
+        }
+        logger.debug(f"SpreadsheetAggregator initialized with phases: {list(self.phase_counts.keys())}")
     
     def _notify_error(self, error_message: str, exception: Exception, context: Dict[str, Any]):
         """
@@ -139,86 +166,137 @@ class SpreadsheetAggregator:
             users_worksheet = self.spreadsheet_manager.get_worksheet(users_all_sheet_name)
             users_data = users_worksheet.get_all_values()
             
-            if not users_data:
-                logger.error(f"{users_all_sheet_name}シートにデータがありません")
+            if not users_data or len(users_data) < 2: # データがないかヘッダーのみの場合はエラー
+                logger.error(f"{users_all_sheet_name}シートにデータがありません、またはヘッダーのみです。")
                 return False
             
-            # ヘッダー行を取得
-            headers = users_data[0]
+            headers_users_all = users_data[0]
+            phase_col_idx_users_all = None
+            for i, h in enumerate(headers_users_all):
+                if h == "フェーズ":
+                    phase_col_idx_users_all = i
+                    break
+            
+            if phase_col_idx_users_all is None:
+                logger.error(f"{users_all_sheet_name}シートに「フェーズ」列が見つかりません。")
+                return False
+
+            unique_phases_in_sheet = set()
+            for r_idx, row_data in enumerate(users_data[1:], start=1): # start=1 でヘッダーを除いた行番号と一致
+                if phase_col_idx_users_all < len(row_data):
+                    phase_val = row_data[phase_col_idx_users_all].strip()
+                    if phase_val: # 空文字は除外
+                        unique_phases_in_sheet.add(phase_val)
+                else:
+                    logger.warning(f"{users_all_sheet_name}シートの {r_idx+1}行目はフェーズ列のデータが不足しています。") # r_idx+1 で実際のシート行番号
+
+            logger.info(f"--- users_allシートのフェーズ名デバッグ ---")
+            logger.info(f"定義済みフェーズ (self.phase_counts): {list(self.phase_counts.keys())}")
+            logger.info(f"users_allシート上のユニークなフェーズ名: {list(unique_phases_in_sheet)}")
+            
+            defined_set = set(self.phase_counts.keys())
+            # sheet_set は unique_phases_in_sheet をそのまま使う
+            
+            logger.info(f"定義にあってシートにないフェーズ: {list(defined_set - unique_phases_in_sheet)}")
+            logger.info(f"シートにあって定義にないフェーズ: {list(unique_phases_in_sheet - defined_set)}")
+            logger.info(f"--- デバッグ終了 ---")
+            
+            # ヘッダー行を取得 (これは users_data から再取得しても良いが、既に headers_users_all がある)
+            headers = users_data[0] # ここでの headers は users_all のヘッダー
             
             # フェーズ列のインデックスを取得
-            phase_index = None
-            registration_route_index = None
-            
-            for i, header in enumerate(headers):
-                if header == "フェーズ":
+            phase_index = -1
+            for i, header_name in enumerate(headers):
+                if header_name == "フェーズ":
                     phase_index = i
-                elif header == "登録経路":
+                    break
+            
+            if phase_index == -1:
+                logger.error("users_allシートに「フェーズ」列が見つかりません。")
+                return None # エラーとしてNoneを返す
+
+            # 登録経路列のインデックスを取得
+            registration_route_index = -1
+            for i, header_name in enumerate(headers):
+                if header_name == "登録経路":
                     registration_route_index = i
+                    break
+            # registration_route_index が -1 の場合でも処理は継続（「不明」として扱われる）
+
             
-            if phase_index is None:
-                logger.error(f"{users_all_sheet_name}シートに「フェーズ」列が見つかりません")
-                return False
-            
-            logger.info(f"フェーズ列のインデックス: {phase_index}")
-            
-            if registration_route_index is None:
-                logger.warning(f"{users_all_sheet_name}シートに「登録経路」列が見つかりません。全体のみを集計します。")
-            else:
-                logger.info(f"登録経路列のインデックス: {registration_route_index}")
-            
-            # フェーズごとのカウントを初期化
+            # フェーズごとのカウントを初期化 (self.phase_countsをディープコピーして使用)
             phase_counts = {
-                "全体": {
-                    "相談前×推薦前(新規エントリー)": 0,  # 空白なしのキーを使用
-                    "相談前×推薦前(open)": 0,
-                    "推薦済(仮エントリー)": 0,
-                    "面談設定済": 0,
-                    "終了": 0
-                }
+                "全体": copy.deepcopy(self.phase_counts)
             }
             
             # 登録経路ごとのカウントも初期化
-            registration_routes = ["LINE", "自社サイト(応募後架電)", "自社サイト(ダイレクトコミュニケーション)"]
-            for route in registration_routes:
-                phase_counts[route] = {
-                    "相談前×推薦前(新規エントリー)": 0,  # 空白なしのキーを使用
-                    "相談前×推薦前(open)": 0,
-                    "推薦済(仮エントリー)": 0,
-                    "面談設定済": 0,
-                    "終了": 0
-                }
-            
+            defined_routes = [s for s in self.sections if s != "全体"]
+            for route in defined_routes:
+                phase_counts[route] = copy.deepcopy(self.phase_counts)
+
+            logger.info(f"集計対象の登録経路 (phase_countsのキー): {list(phase_counts.keys())}")
+            logger.info(f"集計対象のフェーズ定義（全体）: {list(phase_counts.get('全体', {}).keys())}")
+
+
             # データ行を処理してフェーズごとのカウントを集計
-            for row in users_data[1:]:  # ヘッダー行をスキップ
-                if len(row) > phase_index:
-                    phase = row[phase_index].strip()  # 前後の空白を除去
+            for row_idx, row in enumerate(users_data[1:], start=2):  # ヘッダー行をスキップし、行番号は2から開始 (ログ表示用)
+                if not any(row): # 空行はスキップ
+                    logger.debug(f"Skipping empty row at {row_idx}")
+                    continue
+
+                raw_phase_from_sheet = row[phase_index] if phase_index < len(row) and row[phase_index] else "未分類"
+                # Unicode正規化 (NFC) と strip を適用
+                normalized_phase_from_sheet = unicodedata.normalize('NFC', raw_phase_from_sheet).strip()
+                
+                # strip()適用の前後の値をログに出力
+                logger.debug(f"Row {row_idx}: Raw Phase='{raw_phase_from_sheet}', Normalized+Stripped Phase='{normalized_phase_from_sheet}' (len={len(normalized_phase_from_sheet)}, type={type(normalized_phase_from_sheet)})")
+                if normalized_phase_from_sheet:
+                    logger.debug(f"  Normalized+Stripped Phase char codes: {[ord(c) for c in normalized_phase_from_sheet]}")
+
+                phase_to_compare = normalized_phase_from_sheet # 比較に使用するフェーズ名
+
+                registration_route_raw = row[registration_route_index].strip() if registration_route_index != -1 and registration_route_index < len(row) and row[registration_route_index] else "不明"
+                registration_route = unicodedata.normalize('NFC', registration_route_raw).strip()
+                
+                # 「全体」の集計
+                counted_for_overall = False
+                for defined_phase_key in phase_counts["全体"].keys():
+                    normalized_defined_key = unicodedata.normalize('NFC', defined_phase_key)
+                    # 比較前に両方の文字コードをログに出力
+                    if phase_to_compare == "相談済×推薦前(open)" and normalized_defined_key == "相談済×推薦前(open)": # 特定のケースで詳細ログ
+                        logger.debug(f"  Comparing for '全体': Sheet Phase='{phase_to_compare}' (codes: {[ord(c) for c in phase_to_compare]}), Defined Key='{normalized_defined_key}' (codes: {[ord(c) for c in normalized_defined_key]}) Trig: {phase_to_compare == normalized_defined_key}")
                     
-                    # デバッグ: 特定のフェーズに関する詳細情報
-                    if "新規エントリー" in phase:
-                        logger.info(f"新規エントリー行検出: '{phase}', len={len(phase)}, code points={[ord(c) for c in phase]}")
-                    
-                    # 全体のカウント
-                    for key in phase_counts["全体"].keys():
-                        if phase == key or phase == " " + key:  # 空白ありとなしの両方に対応
-                            phase_counts["全体"][key] += 1
-                            # デバッグ: マッチした場合の詳細
-                            if "新規エントリー" in key:
-                                logger.info(f"マッチしたキー: '{key}' と フェーズ: '{phase}'")
+                    if phase_to_compare == normalized_defined_key:
+                        phase_counts["全体"][defined_phase_key] += 1 # 元のキーでカウント
+                        counted_for_overall = True
+                        logger.debug(f"    [全体] Match found: '{phase_to_compare}' == '{normalized_defined_key}'. Counted for '{defined_phase_key}'.")
+                        break
+                
+                if not counted_for_overall and phase_to_compare and phase_to_compare != "未分類":
+                    unknown_phase_codes = [ord(c) for c in phase_to_compare]
+                    logger.warning(f"全体セクションで未知のフェーズ: '{phase_to_compare}' (char codes: {unknown_phase_codes}) (users_allシート {row_idx}行目) - 集計から除外されます。 Defined keys: {list(phase_counts['全体'].keys())}")
+
+                # 登録経路別の集計
+                if registration_route in phase_counts: 
+                    counted_for_route = False
+                    for defined_phase_key in phase_counts[registration_route].keys():
+                        normalized_defined_key = unicodedata.normalize('NFC', defined_phase_key)
+                        if phase_to_compare == "相談済×推薦前(open)" and normalized_defined_key == "相談済×推薦前(open)": # 特定のケースで詳細ログ
+                             logger.debug(f"  Comparing for route '{registration_route}': Sheet Phase='{phase_to_compare}' (codes: {[ord(c) for c in phase_to_compare]}), Defined Key='{normalized_defined_key}' (codes: {[ord(c) for c in normalized_defined_key]}) Trig: {phase_to_compare == normalized_defined_key}")
+
+                        if phase_to_compare == normalized_defined_key:
+                            phase_counts[registration_route][defined_phase_key] += 1 # 元のキーでカウント
+                            counted_for_route = True
+                            logger.debug(f"    [{registration_route}] Match found: '{phase_to_compare}' == '{normalized_defined_key}'. Counted for '{defined_phase_key}'.")
                             break
                     
-                    # 登録経路ごとのカウント
-                    if registration_route_index is not None and len(row) > registration_route_index:
-                        route = row[registration_route_index].strip()  # 前後の空白を除去
-                        if route in registration_routes:
-                            for key in phase_counts[route].keys():
-                                if phase == key or phase == " " + key:  # 空白ありとなしの両方に対応
-                                    phase_counts[route][key] += 1
-                                    break
-            
-            logger.info(f"全体のフェーズごとのカウント: {phase_counts['全体']}")
-            for route in registration_routes:
-                logger.info(f"{route}のフェーズごとのカウント: {phase_counts[route]}")
+                    if not counted_for_route and phase_to_compare and phase_to_compare != "未分類":
+                        unknown_phase_codes = [ord(c) for c in phase_to_compare]
+                        logger.warning(f"登録経路 '{registration_route}' で未知のフェーズ: '{phase_to_compare}' (char codes: {unknown_phase_codes}) (users_allシート {row_idx}行目) - 集計から除外されます。 Defined keys: {list(phase_counts[registration_route].keys())}")
+                elif registration_route and registration_route != "不明": 
+                    logger.warning(f"未知の登録経路: '{registration_route}' (users_allシート {row_idx}行目) - この経路のデータは登録経路別集計には含まれません。")
+
+            logger.info(f"フェーズごとのカウント（全体）最終結果: {phase_counts.get('全体', {})}")
             
             # COUNT_USERSシートからデータを取得
             count_worksheet = self.spreadsheet_manager.get_worksheet(count_users_sheet_name)
@@ -262,7 +340,7 @@ class SpreadsheetAggregator:
                         target_row_index = empty_row_index
                         logger.info(f"空行を見つけました: {empty_row_index + 1}行目")
                         # 行全体を更新
-                        count_worksheet.update(f"A{empty_row_index + 1}:{chr(65 + len(new_row) - 1)}{empty_row_index + 1}", [new_row])
+                        count_worksheet.update(f"A{empty_row_index + 1}:{_custom_col_to_a1(len(new_row))}{empty_row_index + 1}", [new_row])
                     else:
                         # 新しい行を追加
                         count_worksheet.append_row(new_row)
@@ -281,7 +359,7 @@ class SpreadsheetAggregator:
             count_headers = count_data[0]
             
             # ヘッダーから各カラムの位置を特定
-            sections = ["全体", "LINE", "自社サイト(応募後架電)", "自社サイト(ダイレクトコミュニケーション)"]
+            sections = ["全体", "LINE", "自社サイト(応募後架電)", "自社サイト(ダイレクトコミュニケーション)", "LINE（エージェント）"]
             section_columns = {}
             phases = list(phase_counts["全体"].keys())  # フェーズのリスト
             
@@ -297,7 +375,7 @@ class SpreadsheetAggregator:
                 for j, header in enumerate(count_headers):
                     if header == section:
                         section_starts[section] = j
-                        logger.info(f"セクション '{section}' の開始位置: 列{j+1} ({chr(65+j)})")
+                        logger.info(f"セクション '{section}' の開始位置: 列{j+1} ({_custom_col_to_a1(j+1)})")
                         break
             
             # 各セクションごとにフェーズカラムを割り当て
@@ -335,17 +413,19 @@ class SpreadsheetAggregator:
                                 for phase in phases:
                                     if phase in sub_headers[i]:
                                         section_columns[section][phase] = i
-                                        logger.info(f"サブヘッダーからフェーズ '{phase}' を列{i+1} ({chr(65+i)})に割り当て")
+                                        logger.info(f"サブヘッダーからフェーズ '{phase}' を列{i+1} ({_custom_col_to_a1(i+1)})に割り当て")
                     
                     # サブヘッダーで見つからなかった場合、従来の方法で順番に割り当て
                     if all(section_columns[section][phase] is None for phase in phases):
                         logger.info(f"サブヘッダーからフェーズが見つかりませんでした。順番に割り当てます。")
                         for i, phase in enumerate(phases):
                             col_index = start_col + i
-                            # 前日差分カラムを避ける
-                            if col_index < len(count_headers) and "前日差分" not in count_headers[col_index]:
+                            # 前日差分カラムと合計カラムを避ける
+                            if col_index < len(count_headers) and \
+                               "前日差分" not in count_headers[col_index] and \
+                               "合計" not in count_headers[col_index]: # 「合計」をスキップする条件を追加
                                 section_columns[section][phase] = col_index
-                                logger.info(f"デフォルト割り当て: セクション '{section}' のフェーズ '{phase}' を列{col_index+1} ({chr(65+col_index)})に割り当て")
+                                logger.info(f"デフォルト割り当て: セクション '{section}' のフェーズ '{phase}' を列{col_index+1} ({_custom_col_to_a1(col_index+1)})に割り当て")
                     
                     # 特別なケース：LINEセクションの相談前×推薦前(新規エントリー)が特定の場所にある場合
                     if section == "LINE":
@@ -356,14 +436,14 @@ class SpreadsheetAggregator:
                         if len(count_data) > 1:
                             for i in range(max(0, section_starts["LINE"] - 1), min(len(count_data[1]), section_starts["LINE"] + 10)):
                                 if i < len(count_data[1]):
-                                    logger.info(f"LINE周辺のカラム内容 列{i+1}({chr(65+i)}): '{count_data[1][i] if i < len(count_data[1]) else '範囲外'}'")
+                                    logger.info(f"LINE周辺のカラム内容 列{i+1}({_custom_col_to_a1(i+1)}): '{count_data[1][i] if i < len(count_data[1]) else '範囲外'}'")
             
             # デバッグ情報：ヘッダー情報とカラム位置のマッピングをログに記録
             logger.info(f"ヘッダー行の内容: {count_headers}")
             for section in sections:
                 logger.info(f"セクション '{section}' のカラムマッピング:")
                 for phase, col_index in section_columns[section].items():
-                    logger.info(f"  - {phase}: {'None' if col_index is None else f'列{col_index+1} ({chr(65+col_index)})'}")
+                    logger.info(f"  - {phase}: {'None' if col_index is None else f'列{col_index+1} ({_custom_col_to_a1(col_index + 1)})'}")
             
             # 更新するセルの準備
             update_cells = []
@@ -379,10 +459,10 @@ class SpreadsheetAggregator:
                     })
                     # デバッグ: 相談前×推薦前(新規エントリー)の更新について詳細出力
                     if "新規エントリー" in phase:
-                        logger.info(f"「{phase}」を列{col_index+1} ({chr(65+col_index)})に値={count}で更新します")
+                        logger.info(f"「{phase}」を列{col_index+1} ({_custom_col_to_a1(col_index + 1)})に値={count}で更新します")
             
             # 各登録経路セクションも更新
-            for route in registration_routes:
+            for route in defined_routes:
                 for phase, count in phase_counts[route].items():
                     if route in section_columns and phase in section_columns[route] and section_columns[route][phase] is not None:
                         col_index = section_columns[route][phase]
@@ -393,12 +473,12 @@ class SpreadsheetAggregator:
                         })
                         # デバッグ: 相談前×推薦前(新規エントリー)の更新について詳細出力
                         if "新規エントリー" in phase:
-                            logger.info(f"[{route}] 「{phase}」を列{col_index+1} ({chr(65+col_index)})に値={count}で更新します")
+                            logger.info(f"[{route}] 「{phase}」を列{col_index+1} ({_custom_col_to_a1(col_index + 1)})に値={count}で更新します")
             
             # デバッグ情報：更新するセルの情報をログに記録
             logger.info(f"更新予定のセル数: {len(update_cells)}")
             for i, cell in enumerate(update_cells[:10]):  # 最初の10個だけ表示
-                logger.info(f"  セル{i+1}: 行{cell['row']}、列{cell['col']} ({chr(64+cell['col'])}{cell['row']}) = {cell['value']}")
+                logger.info(f"  セル{i+1}: 行{cell['row']}、列{cell['col']} ({_custom_col_to_a1(cell['col'])}{cell['row']}) = {cell['value']}")
             if len(update_cells) > 10:
                 logger.info(f"  ...他{len(update_cells)-10}個のセル")
             
@@ -409,7 +489,7 @@ class SpreadsheetAggregator:
                 for section in sections:
                     if section in section_columns and phase in section_columns[section]:
                         col_index = section_columns[section][phase]
-                        logger.info(f"  セクション '{section}' のマッピング: {'None' if col_index is None else f'列{col_index+1} ({chr(65+col_index)})'}")
+                        logger.info(f"  セクション '{section}' のマッピング: {'None' if col_index is None else f'列{col_index+1} ({_custom_col_to_a1(col_index + 1)})'}")
             
             # セルを一括更新
             if update_cells:
@@ -417,7 +497,7 @@ class SpreadsheetAggregator:
                 batch_data = []
                 for cell_data in update_cells:
                     batch_data.append({
-                        'range': f"{chr(64 + cell_data['col'])}{cell_data['row']}",
+                        'range': f"{_custom_col_to_a1(cell_data['col'])}{cell_data['row']}",
                         'values': [[cell_data['value']]]
                     })
                 
@@ -634,7 +714,7 @@ class SpreadsheetAggregator:
                     logger.info(f"{list_entryprocess_sheet_name}シートに既に今日の日付 ({today}) のデータが存在します。データを上書きします。")
                     # 既存データを削除
                     column_count = len(expected_headers)
-                    last_column_letter = chr(64 + column_count) if column_count <= 26 else chr(64 + column_count // 26) + chr(64 + column_count % 26)
+                    last_column_letter = _custom_col_to_a1(column_count)
                     delete_range = f"A{i+1}:{last_column_letter}{i+len(aggregated_data)}"
                     try:
                         list_ep_worksheet.batch_clear([delete_range])
@@ -676,7 +756,7 @@ class SpreadsheetAggregator:
             
             # データを一括更新
             column_count = len(expected_headers)
-            last_column_letter = chr(64 + column_count) if column_count <= 26 else chr(64 + column_count // 26) + chr(64 + column_count % 26)
+            last_column_letter = _custom_col_to_a1(column_count)
             update_range = f"A{start_row}:{last_column_letter}{start_row + len(aggregated_data) - 1}"
             
             try:
@@ -746,4 +826,280 @@ class SpreadsheetAggregator:
             else:
                 logger.error("選考プロセス集計処理に失敗しました")
         
-        return users_success, entryprocess_success 
+        return users_success, entryprocess_success
+
+    def record_daily_phase_counts(self, aggregation_date: Optional[datetime.date] = None) -> bool:
+        """
+        USERS_ALLシートのデータを集計して、COUNT_USERSシートに
+        日付ごとのフェーズ別カウントを記録する
+
+        Args:
+            aggregation_date (datetime.date, optional): 集計日. デフォルトは今日
+
+        Returns:
+            bool: 処理が成功した場合はTrue、失敗した場合はFalse
+        """
+        try:
+            logger.info("=== 日別フェーズ別ユーザー数の記録処理を開始します ===")
+            
+            if not self.spreadsheet_manager:
+                logger.error("SpreadsheetManagerが初期化されていません。")
+                return False
+
+            # settings.iniからシート名を取得
+            try:
+                users_all_sheet_name = env.get_config_value('SHEET_NAMES', 'USERSALL').strip('"\'')
+                count_users_sheet_name = env.get_config_value('SHEET_NAMES', 'COUNT_USERS').strip('"\'')
+                logger.info(f"設定ファイルのシート名: USERSALL='{users_all_sheet_name}', COUNT_USERS='{count_users_sheet_name}'")
+            except Exception as e:
+                logger.error(f"設定ファイルからのシート名取得に失敗: {str(e)}")
+                return False
+            
+            today_str = aggregation_date.strftime("%Y/%m/%d") if aggregation_date else datetime.datetime.now().strftime("%Y/%m/%d")
+            logger.info(f"集計日: {today_str}")
+            
+            # ユーザーデータの取得
+            users_worksheet = self.spreadsheet_manager.get_worksheet(users_all_sheet_name)
+            users_data = users_worksheet.get_all_values()
+            
+            if not users_data or len(users_data) < 2: # ヘッダー行すらないか、ヘッダー行のみ
+                logger.error(f"'{users_all_sheet_name}'シートにデータがありません（ヘッダー行を除く）。")
+                return False
+            
+            # フェーズ列とオプションで登録経路列のインデックスを取得
+            headers = users_data[0]
+            try:
+                phase_index = headers.index("フェーズ")
+            except ValueError:
+                logger.error(f"'{users_all_sheet_name}'シートに「フェーズ」列が見つかりません。ヘッダー: {headers}")
+                return False
+            
+            try:
+                route_index = headers.index("登録経路")
+                logger.info(f"「登録経路」列のインデックス: {route_index}")
+            except ValueError:
+                route_index = -1
+                logger.warning(f"'{users_all_sheet_name}'シートに「登録経路」列が見つかりません。登録経路別の集計は行いません。")
+            
+            logger.info(f"「フェーズ」列のインデックス: {phase_index}")
+            
+            # COUNT_USERSシートのデータを取得
+            count_worksheet = self.spreadsheet_manager.get_worksheet(count_users_sheet_name)
+            count_data = count_worksheet.get_all_values()
+            if not count_data or len(count_data) < 2: # ヘッダー行とサブヘッダー行が必要
+                logger.error(f"'{count_users_sheet_name}'シートにデータがありません（少なくともヘッダー行とサブヘッダー行が必要）。")
+                return False
+
+            # セクション行（1行目）とフェーズ行（2行目）を取得
+            section_headers = count_data[0]
+            if len(count_data) >= 2:
+                phase_headers = count_data[1]
+            else:
+                logger.error(f"'{count_users_sheet_name}'シートにサブヘッダー行（フェーズ定義行）がありません。")
+                return False
+            
+            logger.info(f"セクション行: {section_headers}")
+            logger.info(f"フェーズ行: {phase_headers}")
+            
+            # セクションとフェーズの対応関係を作成
+            sections = {}
+            current_section = None
+            
+            for i, header in enumerate(section_headers):
+                if header and i > 0:  # 最初の列は日付なのでスキップ
+                    sections[i] = header
+                    current_section = header
+                elif current_section and i > 0:
+                    # 空のヘッダーは前のセクションの続き
+                    sections[i] = current_section
+            
+            logger.info(f"検出されたセクション: {sections}")
+            
+            # 実際のフェーズ名とその列インデックスのマッピングを作成
+            phase_column_map = {}
+            for i, phase_name in enumerate(phase_headers):
+                if phase_name and i > 0:  # 最初の列は日付なのでスキップ
+                    if "前日差分" not in phase_name and "合計" not in phase_name:  # 前日差分や合計列はスキップ
+                        phase_column_map[phase_name] = i
+                        section = sections.get(i, "不明")
+                        logger.info(f"フェーズ '{phase_name}' をセクション '{section}' の列 {i+1} ({_custom_col_to_a1(i+1)}) に割り当て")
+            
+            if not phase_column_map:
+                logger.error(f"'{count_users_sheet_name}'シートから有効なフェーズが見つかりませんでした。")
+                return False
+            
+            logger.info(f"検出されたフェーズとカラム: {phase_column_map}")
+            
+            # フェーズごとのカウント初期化
+            phase_counts = {phase: 0 for phase in phase_column_map.keys()}
+            section_counts = {section: {} for section in set(sections.values())}
+            
+            for section_name in section_counts:
+                for i, phase_name in enumerate(phase_headers):
+                    if i > 0 and phase_name and sections.get(i) == section_name:
+                        if "前日差分" not in phase_name and "合計" not in phase_name:
+                            section_counts[section_name][phase_name] = 0
+            
+            logger.info(f"セクション別フェーズカウント初期値: {section_counts}")
+            
+            # users_allシート内の各行をフェーズ別にカウント
+            unknown_phases = set()
+            
+            for row_num, row in enumerate(users_data[1:], start=2):  # ヘッダー行をスキップ
+                if len(row) > phase_index:
+                    # フェーズと登録経路を取得して正規化
+                    phase_raw = row[phase_index].strip() if phase_index < len(row) else ""
+                    phase = unicodedata.normalize('NFC', phase_raw).strip()
+                    
+                    route_raw = row[route_index].strip() if route_index >= 0 and route_index < len(row) else ""
+                    route = unicodedata.normalize('NFC', route_raw).strip()
+                    
+                    # デバッグログ
+                    if not phase in phase_counts and phase:
+                        if phase not in unknown_phases:  # 同じフェーズは一度だけログに出力
+                            logger.debug(f"未知のフェーズ: '{phase}' (users_allシート {row_num}行目)")
+                            unknown_phases.add(phase)
+                    
+                    # 全体用のカウントを更新
+                    if phase in phase_counts:
+                        phase_counts[phase] += 1
+                    
+                    # セクション別のカウントを更新
+                    if route and route in section_counts:
+                        section_phase_counts = section_counts[route]
+                        if phase in section_phase_counts:
+                            section_counts[route][phase] += 1
+            
+            if unknown_phases:
+                logger.warning(f"{len(unknown_phases)}種類の未知のフェーズがありました: {sorted(list(unknown_phases))}")
+            
+            logger.info(f"集計されたフェーズごとのカウント（全体）: {phase_counts}")
+            logger.info(f"集計されたセクション別フェーズカウント: {section_counts}")
+            
+            # data_usersシート内の適切な行を探す（日付から）
+            date_col_index = 0  # 日付列は通常A列（インデックス0）
+            target_row_index = -1
+            
+            for i, row in enumerate(count_data):
+                if row and len(row) > date_col_index and row[date_col_index] == today_str:
+                    target_row_index = i
+                    logger.info(f"日付 '{today_str}' の行が見つかりました (行 {i+1})")
+                    break
+            
+            # 更新するセルの準備
+            cells_to_update = []
+            
+            if target_row_index == -1:
+                # 日付行が見つからない場合は新しい行を追加
+                logger.info(f"'{count_users_sheet_name}'シートに日付 '{today_str}' の行が見つかりません。新しい行を追加します。")
+                
+                # 新しい行のデータを準備（初期値はすべて0）
+                new_row = [today_str] + [0] * (max(sections.keys()) if sections else 0)
+                
+                # フェーズカウントを設定
+                for phase, count in phase_counts.items():
+                    col_index = phase_column_map.get(phase)
+                    if col_index is not None and col_index < len(new_row):
+                        new_row[col_index] = count
+                
+                try:
+                    # 行を追加
+                    count_worksheet.append_row(new_row, value_input_option='USER_ENTERED')
+                    logger.info(f"新しい行をシートに追加しました: {new_row}")
+                    return True
+                except Exception as e:
+                    logger.error(f"新しい行の追加に失敗しました: {e}")
+                    return False
+            else:
+                # 既存の行を更新
+                logger.info(f"既存の行 {target_row_index + 1} を更新します")
+                
+                # 全体のフェーズカウントを更新
+                for phase, count in phase_counts.items():
+                    col_index = phase_column_map.get(phase)
+                    if col_index is not None:
+                        cell_ref = f"{_custom_col_to_a1(col_index + 1)}{target_row_index + 1}"
+                        cells_to_update.append({
+                            'range': cell_ref,
+                            'values': [[count]]
+                        })
+                        logger.debug(f"セル {cell_ref} を値 {count} で更新します（フェーズ: {phase}）")
+                
+                # セクション別のフェーズカウントを更新
+                total_by_phase = {}  # フェーズごとの合計値を追跡
+                
+                # 各セクションのフェーズごとに集計
+                for section_name, section_phases in section_counts.items():
+                    if section_name != "全体":  # 全体セクションは後で計算するので除外
+                        logger.info(f"セクション '{section_name}' のフェーズカウントを更新します")
+                        for phase_name, count in section_phases.items():
+                            # 合計値を集計
+                            if phase_name not in total_by_phase:
+                                total_by_phase[phase_name] = 0
+                            total_by_phase[phase_name] += count
+                            
+                            # セクションとフェーズの組み合わせに対応する列を特定
+                            for i, header in enumerate(phase_headers):
+                                if i > 0 and header == phase_name and sections.get(i) == section_name:
+                                    cell_ref = f"{_custom_col_to_a1(i + 1)}{target_row_index + 1}"
+                                    cells_to_update.append({
+                                        'range': cell_ref,
+                                        'values': [[count]]
+                                    })
+                                    logger.debug(f"セル {cell_ref} を値 {count} で更新します（セクション: {section_name}, フェーズ: {phase_name}）")
+                                    break
+                
+                # 全体セクションの更新 - すべての登録経路の合計
+                for phase_name, total_count in total_by_phase.items():
+                    # 全体セクションでのフェーズ列を見つける
+                    for i, header in enumerate(phase_headers):
+                        if i > 0 and header == phase_name and sections.get(i) == "全体":
+                            cell_ref = f"{_custom_col_to_a1(i + 1)}{target_row_index + 1}"
+                            cells_to_update.append({
+                                'range': cell_ref,
+                                'values': [[total_count]]
+                            })
+                            logger.info(f"セル {cell_ref} を合計値 {total_count} で更新します（全体セクション, フェーズ: {phase_name}）")
+                            break
+                
+                # 合計列の更新
+                for section_name in set(sections.values()):
+                    # そのセクションの合計列を見つける
+                    for i, header in enumerate(phase_headers):
+                        if i > 0 and header == "合計" and sections.get(i) == section_name:
+                            # そのセクションのすべてのフェーズの合計値を計算
+                            section_total = 0
+                            if section_name == "全体":
+                                # 全体セクションの合計
+                                section_total = sum(total_by_phase.values())
+                            else:
+                                # 各セクションの合計
+                                section_total = sum(section_counts.get(section_name, {}).values())
+                            
+                            cell_ref = f"{_custom_col_to_a1(i + 1)}{target_row_index + 1}"
+                            cells_to_update.append({
+                                'range': cell_ref,
+                                'values': [[section_total]]
+                            })
+                            logger.info(f"セル {cell_ref} を合計値 {section_total} で更新します（セクション: {section_name}, 合計列）")
+                            break
+                
+                if cells_to_update:
+                    try:
+                        # セルを一括更新
+                        count_worksheet.batch_update(cells_to_update, value_input_option='USER_ENTERED')
+                        logger.info(f"{len(cells_to_update)}個のセルを更新しました")
+                    except Exception as e:
+                        logger.error(f"セルの更新に失敗しました: {e}")
+                        return False
+                else:
+                    logger.warning("更新するセルがありませんでした")
+            
+            logger.info("✅ 日別フェーズ別ユーザー数の記録処理が完了しました")
+            return True
+            
+        except Exception as e:
+            logger.error(f"日別フェーズ別ユーザー数の記録処理中にエラーが発生しました: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
