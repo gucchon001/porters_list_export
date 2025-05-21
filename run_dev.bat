@@ -125,7 +125,7 @@ if not "%CURRENT_HASH%"=="%STORED_HASH%" (
 rem Run the script in module mode
 echo [LOG] 環境: %APP_ENV%
 echo [LOG] 実行スクリプト: %SCRIPT_TO_RUN%
-%PYTHON_CMD% -m %SCRIPT_TO_RUN% %TEST_MODE%
+%PYTHON_CMD% -m %SCRIPT_TO_RUN% --process sequential --aggregate both %TEST_MODE%
 if errorlevel 1 (
     echo Error: スクリプトの実行に失敗しました。
     pause
